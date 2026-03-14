@@ -1,0 +1,7 @@
+# Dependencies are installed on Vercel
+node_modules
+# Local env files (use Vercel Environment Variables instead)
+.env*
+# Debug and IDE
+*.log
+.DS_Store
