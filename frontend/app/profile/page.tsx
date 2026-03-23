@@ -35,7 +35,7 @@ export default function ProfilePage() {
           <div className="relative min-h-[220px] overflow-hidden px-6 py-8 text-white">
             <h1 className="sr-only">User Profile</h1>
             <Image
-              src="/images/login-hero.jpeg"
+              src="/images/login-hero.jpg"
               alt=""
               fill
               className="object-cover"

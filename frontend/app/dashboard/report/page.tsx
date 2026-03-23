@@ -9,7 +9,7 @@ export default function DashboardReportPage() {
       {/* Background image header using login-hero.jpeg */}
       <section className="w-full max-w-md overflow-hidden rounded-md bg-white shadow-md relative h-56">
         <Image
-          src="/images/login-hero.jpeg"
+          src="/images/login-hero.jpg"
           alt="freightPOP report background"
           fill
           className="object-cover"

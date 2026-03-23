@@ -3,8 +3,8 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 
-// Rewards / gift logo – place your PNG at: frontend/public/images/rewards-gift.png
-const REWARDS_GIFT_IMAGE = "/images/rewards-gift.png";
+// Rewards / gift logo located at frontend/public/images/gift.png
+const REWARDS_GIFT_IMAGE = "/images/gift.png";
 
 export default function DailyCheckInPage() {
   const router = useRouter();
@@ -31,7 +31,7 @@ export default function DailyCheckInPage() {
         {/* Banner with background + freightPOP branding */}
         <section className="relative h-44 w-full overflow-hidden">
           <Image
-            src="/images/login-hero.jpeg"
+            src="/images/login-hero.jpg"
             alt=""
             fill
             className="object-cover opacity-80"
@@ -76,7 +76,7 @@ export default function DailyCheckInPage() {
           </div>
         </section>
 
-        {/* 7-day streak boxes – uses rewards gift logo from public/images/rewards-gift.png */}
+        {/* 7-day streak boxes – uses rewards gift logo from public/images/gift.png */}
         <section className="fp-container mt-4 px-4">
           <div className="grid grid-cols-7 gap-2">
             {[1, 2, 3, 4, 5, 6, 7].map((day) => (

@@ -10,7 +10,7 @@ export default function CreditScorePage() {
       {/* Full-page background */}
       <div className="fixed inset-0 z-0">
         <Image
-          src="/images/login-hero.jpeg"
+          src="/images/login-hero.jpg"
           alt=""
           fill
           className="object-cover"
