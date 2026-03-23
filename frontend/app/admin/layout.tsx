@@ -19,13 +19,20 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-const navItems = [
+type NavItem = {
+  href: string;
+  label: string;
+  icon: keyof typeof iconPaths;
+  badge?: "pending";
+};
+
+const navItems: NavItem[] = [
   { href: "/admin", label: "Dashboard", icon: "dashboard" },
   { href: "/admin/users", label: "Users", icon: "users" },
   { href: "/admin/approvals", label: "Pending Approvals", icon: "approvals", badge: "pending" },
   { href: "/admin/admins", label: "Admins", icon: "admins" },
   { href: "/admin/settings", label: "Settings", icon: "settings" },
-] as const;
+];
 
 const iconPaths: Record<string, React.ReactNode> = {
   dashboard: (

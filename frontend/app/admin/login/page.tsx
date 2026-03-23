@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi } from "@/lib/api";
 import { clearAuth, getAuthUser, getToken, setAuth } from "@/lib/auth-store";
 
-export default function AdminLoginPage() {
+function AdminLoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
@@ -343,5 +343,13 @@ export default function AdminLoginPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+export default function AdminLoginPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-gradient-to-br from-[#26264a] via-[#343b72] to-[#1f2350]" />}>
+      <AdminLoginContent />
+    </Suspense>
   );
 }

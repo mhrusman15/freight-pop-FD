@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAssetBalance } from "@/lib/use-asset-balance";
 import { getAssetBalance, subtractFromAssetBalance } from "@/lib/asset-balance-store";
-import { authApi } from "@/lib/api";
 import { getAuthUser, getToken } from "@/lib/auth-store";
 
 const WITHDRAW_METHODS = ["BANK"] as const;
@@ -55,19 +54,10 @@ export default function ProfileWithdrawPage() {
       return;
     }
     setSubmitting(true);
-    if (token) {
-      const result = await authApi.withdraw(amount);
-      setSubmitting(false);
-      if (result.error) {
-        setSubmitError(result.error);
-        return;
-      }
-      refetchBalance();
-      setFormData((prev) => ({ ...prev, cashOutAmount: "", withdrawalPassword: "" }));
-      router.push("/profile");
-      return;
-    }
     subtractFromAssetBalance(amount);
+    if (token) {
+      refetchBalance();
+    }
     setSubmitting(false);
     setFormData((prev) => ({ ...prev, cashOutAmount: "", withdrawalPassword: "" }));
     router.push("/profile");

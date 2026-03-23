@@ -731,11 +731,11 @@ export function ReportClient() {
 
         <div className="px-5 pt-4">
           <div className="grid grid-cols-3 text-sm font-semibold text-slate-900">
-            {[
-              { id: "all", label: "All" as const },
-              { id: "pending", label: "Pending" as const },
-              { id: "completed", label: "COMPLETED" as const },
-            ].map((t) => (
+            {([
+              { id: "all", label: "All" },
+              { id: "pending", label: "Pending" },
+              { id: "completed", label: "COMPLETED" },
+            ] as const).map((t) => (
               <button
                 key={t.id}
                 type="button"
