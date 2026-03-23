@@ -384,6 +384,9 @@ export function ReportClient() {
   };
 
   const filteredActivityEntries = useMemo(() => {
+    const hasAdminApproval = Boolean(taskStatus?.taskAssignmentGrantedAt);
+    if (!hasAdminApproval) return [];
+
     const pendingEntries = activityEntries.filter((e) => e.status === "pending");
     const completedNotifications = buildCompletedNotifications(activityEntries, total);
     const canShowDisposeEntries =
