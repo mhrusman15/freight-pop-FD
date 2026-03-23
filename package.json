@@ -7,5 +7,10 @@
     "prebuild": "cd frontend && npm ci",
     "start": "cd frontend && npm run start",
     "lint": "cd frontend && npm run lint"
+  },
+  "devDependencies": {
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
   }
 }
