@@ -22,6 +22,37 @@ type ActivityEntry = {
   status: ActivityStatus;
 };
 
+function buildCompletedNotifications(
+  entries: ActivityEntry[],
+  cycleSize: number,
+): ActivityEntry[] {
+  const completed = entries.filter((e) => e.status === "completed");
+  if (completed.length === 0) return [];
+
+  const notifications: ActivityEntry[] = [];
+  for (let i = 0; i < completed.length; i += cycleSize) {
+    const chunk = completed.slice(i, i + cycleSize);
+    if (chunk.length === 0) continue;
+    const latest = chunk[0];
+    const totalQuantity = chunk.reduce((sum, entry) => sum + entry.quantityRs, 0);
+    const totalCommission = chunk.reduce((sum, entry) => sum + entry.commissionRs, 0);
+    notifications.push({
+      id: `completed-summary-${latest.id}-${chunk.length}`,
+      title:
+        chunk.length >= cycleSize
+          ? `${cycleSize} Tasks Completed Report`
+          : `${chunk.length} Tasks Completed`,
+      orderNumber: `BATCH-${latest.orderNumber}`,
+      quantityRs: totalQuantity,
+      commissionRs: totalCommission,
+      createdAt: latest.createdAt,
+      status: "completed",
+    });
+  }
+
+  return notifications;
+}
+
 function StarRating({
   value,
   onChange,
@@ -319,18 +350,6 @@ export function ReportClient() {
       setCompletedInCycle((prev) => {
         const next = prev + 1;
         if (next >= total) {
-          setActivityEntries((entries) => [
-            {
-              id: uniqueId("summary"),
-              title: "30 Tasks Completed Report",
-              orderNumber: `BATCH-${randomDigits(8)}`,
-              quantityRs: 0,
-              commissionRs: instantProfit + activeTask.commission,
-              createdAt: now,
-              status: "completed",
-            },
-            ...entries.filter((x) => x.status !== "pending"),
-          ]);
           setActivePendingEntryId(null);
           setSelectedGiftBox(null);
           setGiftRewardTask(null);
@@ -364,20 +383,14 @@ export function ReportClient() {
     setGiftRewardTask(null);
   };
 
-  const disposeActivity = () => {
-    setActivityEntries([]);
-    setCompletedInCycle(0);
-    setCurrentTaskIndex(0);
-    setInstantProfit(0);
-    setActivePendingEntryId(null);
-    setIsActivityModalOpen(false);
-  };
-
   const filteredActivityEntries = useMemo(() => {
     const pendingEntries = activityEntries.filter((e) => e.status === "pending");
-    const virtualPendingNeeded =
-      pendingEntries.length === 0 &&
+    const completedNotifications = buildCompletedNotifications(activityEntries, total);
+    const canShowDisposeEntries =
       isAdminAssignedCyclePending;
+    const virtualPendingNeeded =
+      canShowDisposeEntries &&
+      pendingEntries.length === 0;
     const virtualPending: ActivityEntry[] = virtualPendingNeeded
       ? [
           {
@@ -391,12 +404,15 @@ export function ReportClient() {
           },
         ]
       : [];
-    const allEntries = [...virtualPending, ...activityEntries];
+    const visiblePendingEntries = canShowDisposeEntries
+      ? [...virtualPending, ...pendingEntries]
+      : [];
+    const allEntries = [...visiblePendingEntries, ...completedNotifications];
 
     if (activityTab === "all") return allEntries;
-    if (activityTab === "pending") return allEntries.filter((e) => e.status === "pending");
+    if (activityTab === "pending") return visiblePendingEntries;
     return allEntries.filter((e) => e.status === "completed");
-  }, [activityEntries, activityTab, taskStatus, isAdminAssignedCyclePending]);
+  }, [activityEntries, activityTab, taskStatus, isAdminAssignedCyclePending, total]);
 
   const handlePendingDispose = (entry: ActivityEntry) => {
     if (entry.id === "admin-assigned-pending") {
