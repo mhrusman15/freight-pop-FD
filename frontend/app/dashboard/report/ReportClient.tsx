@@ -211,6 +211,10 @@ export function ReportClient() {
 
   const refreshTaskStatus = () =>
     userApi.getTaskStatus().then((res) => {
+      if (res.error || !res.data) {
+        setTaskStatus(null);
+        return res;
+      }
       if (res.data) {
         setTaskStatus(res.data);
         const grantedAt = res.data.taskAssignmentGrantedAt ?? null;
@@ -226,7 +230,10 @@ export function ReportClient() {
 
   const loadTaskActivity = () =>
     userApi.getTaskActivity().then((res) => {
-      if (!res.data?.entries) return;
+      if (res.error || !res.data?.entries) {
+        setActivityEntries([]);
+        return;
+      }
       const mapped: ActivityEntry[] = res.data.entries.map((e: UserTaskActivityEntry) => ({
         id: e.id,
         title: e.title,
@@ -384,31 +391,17 @@ export function ReportClient() {
   };
 
   const filteredActivityEntries = useMemo(() => {
-    const hasAdminApproval = Boolean(taskStatus?.taskAssignmentGrantedAt);
+    const hasAdminApproval =
+      Boolean(taskStatus?.taskAssignmentGrantedAt) &&
+      !Boolean(taskStatus?.requiresAdminAssignment);
     if (!hasAdminApproval) return [];
 
     const pendingEntries = activityEntries.filter((e) => e.status === "pending");
     const completedNotifications = buildCompletedNotifications(activityEntries, total);
     const canShowDisposeEntries =
       isAdminAssignedCyclePending;
-    const virtualPendingNeeded =
-      canShowDisposeEntries &&
-      pendingEntries.length === 0;
-    const virtualPending: ActivityEntry[] = virtualPendingNeeded
-      ? [
-          {
-            id: "admin-assigned-pending",
-            title: `Admin Assigned Tasks (${taskStatus?.remaining ?? 0} remaining)`,
-            orderNumber: "Assigned by admin",
-            quantityRs: 0,
-            commissionRs: 0,
-            createdAt: new Date(),
-            status: "pending",
-          },
-        ]
-      : [];
     const visiblePendingEntries = canShowDisposeEntries
-      ? [...virtualPending, ...pendingEntries]
+      ? pendingEntries
       : [];
     const allEntries = [...visiblePendingEntries, ...completedNotifications];
 
@@ -418,25 +411,7 @@ export function ReportClient() {
   }, [activityEntries, activityTab, taskStatus, isAdminAssignedCyclePending, total]);
 
   const handlePendingDispose = (entry: ActivityEntry) => {
-    if (entry.id === "admin-assigned-pending") {
-      const now = new Date();
-      setActivityEntries((prev) => [
-        {
-          id: uniqueId("assign-receipt"),
-          title: "Admin Assigned Tasks (collected)",
-          orderNumber: "Assigned by admin",
-          quantityRs: 0,
-          commissionRs: 0,
-          createdAt: now,
-          status: "completed",
-        },
-        ...prev,
-      ]);
-      setAdminAssignReceiptDone(true);
-      setToastMessage("Collected. You can now perform tasks.");
-      window.setTimeout(() => setToastMessage(""), 1800);
-      return;
-    }
+    void entry;
     setToastMessage("Insufficient balance, please recharge and try again");
     window.setTimeout(() => setToastMessage(""), 2200);
   };
