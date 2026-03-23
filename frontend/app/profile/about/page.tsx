@@ -45,8 +45,9 @@ export default function ProfileAboutPage() {
     <main className="min-h-screen bg-white dark:bg-slate-900">
       <header className="sticky top-0 z-20 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <div className="flex min-h-[3rem] items-center justify-center px-4">
-          <Link
-            href="/profile"
+          <button
+            type="button"
+            onClick={() => (typeof window !== "undefined" && window.history.length > 1 ? router.back() : router.push("/profile"))}
             className="absolute left-4 flex items-center text-slate-900 dark:text-slate-100 hover:text-slate-600 dark:hover:text-slate-300"
             aria-label="Back to profile"
           >
@@ -63,7 +64,7 @@ export default function ProfileAboutPage() {
                 d="M15 19l-7-7 7-7"
               />
             </svg>
-          </Link>
+          </button>
           <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">
             About Us
           </h1>

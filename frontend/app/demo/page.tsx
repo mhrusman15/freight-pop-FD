@@ -1,6 +1,9 @@
 "use client";
 
+import { useAssetBalance } from "@/lib/use-asset-balance";
+
 export default function DemoPage() {
+  const { formatted: assetBalanceFormatted } = useAssetBalance();
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col items-center py-10 px-4">
       <section className="w-full max-w-4xl overflow-hidden rounded-md shadow-md bg-white">
@@ -20,7 +23,7 @@ export default function DemoPage() {
               </span>
               Total Capital
             </p>
-            <p className="text-2xl font-semibold text-slate-900">Rs20341.15</p>
+            <p className="text-2xl font-semibold text-slate-900">{assetBalanceFormatted}</p>
           </div>
 
           <div className="space-y-1">

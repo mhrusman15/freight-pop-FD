@@ -4,27 +4,36 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAssetBalance } from "@/lib/use-asset-balance";
+import { getAuthUser, getToken } from "@/lib/auth-store";
 
 export default function ProfilePage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
+  const [mounted, setMounted] = useState(false);
+  const { formatted: assetBalanceFormatted } = useAssetBalance();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const saved = window.localStorage.getItem("adminEmail");
-    const remembered = window.localStorage.getItem("adminRemember");
-    if (!saved && remembered !== "true") {
+    const token = getToken();
+    const user = getAuthUser();
+    if (!token || !user) {
       router.replace("/login");
       return;
     }
-    setEmail(saved || "");
+    setEmail(user.email);
   }, [router]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   return (
     <main className="min-h-screen bg-slate-100 dark:bg-slate-900">
       <div className="fp-container py-8">
         <div className="mx-auto max-w-lg overflow-hidden rounded-2xl bg-white dark:bg-slate-800 shadow-md">
           <div className="relative min-h-[220px] overflow-hidden px-6 py-8 text-white">
+            <h1 className="sr-only">User Profile</h1>
             <Image
               src="/images/login-hero.jpeg"
               alt=""
@@ -77,7 +86,9 @@ export default function ProfilePage() {
               <span className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                 Asset Balance
               </span>
-              <span className="font-semibold text-slate-900 dark:text-slate-100">Rs 20341.15</span>
+              <span className="font-semibold text-slate-900 dark:text-slate-100">
+                {mounted ? assetBalanceFormatted : "—"}
+              </span>
             </div>
             <div className="flex items-center justify-between py-2">
               <span className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
@@ -137,7 +148,7 @@ export default function ProfilePage() {
                   href="/profile/theme"
                   className="flex items-center justify-between rounded-lg px-3 py-2.5 text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
-                  Appearance (Dark / Light)
+                  User Theme (Dark / Light)
                   <span className="text-slate-400">›</span>
                 </Link>
               </li>
@@ -146,7 +157,7 @@ export default function ProfilePage() {
                   href="/profile/security"
                   className="flex items-center justify-between rounded-lg px-3 py-2.5 text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
-                  Security Center
+                  User Security
                   <span className="text-slate-400">›</span>
                 </Link>
               </li>

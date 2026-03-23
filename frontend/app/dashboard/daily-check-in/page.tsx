@@ -1,26 +1,30 @@
+"use client";
+
 import Image from "next/image";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 // Rewards / gift logo – place your PNG at: frontend/public/images/rewards-gift.png
 const REWARDS_GIFT_IMAGE = "/images/rewards-gift.png";
 
 export default function DailyCheckInPage() {
+  const router = useRouter();
   return (
     <main className="min-h-screen bg-slate-100 text-slate-900">
       <div className="flex flex-col min-h-screen">
         {/* Top bar: back + title */}
         <header className="flex items-center gap-3 bg-white px-4 py-4 shadow-sm">
-          <Link
-            href="/dashboard"
+          <button
+            type="button"
+            onClick={() => (typeof window !== "undefined" && window.history.length > 1 ? router.back() : router.push("/dashboard"))}
             className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
             aria-label="Back to dashboard"
           >
             <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
-          </Link>
+          </button>
           <h1 className="flex-1 text-center text-xl font-bold text-slate-900 pr-10">
-            Daily Check-In
+            User Daily Check-In
           </h1>
         </header>
 

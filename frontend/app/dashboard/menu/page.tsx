@@ -57,6 +57,8 @@ const IconChevronRight = ({ className }: { className?: string }) => (
   </svg>
 );
 
+export const metadata = { title: "User Menu | freightPOP" };
+
 export default function DashboardMenuPage() {
   return (
     <main className="min-h-screen bg-white text-slate-900">
@@ -77,7 +79,7 @@ export default function DashboardMenuPage() {
         {/* Header: freightPOP + star, profile, close */}
         <header className="flex items-center justify-between px-4 py-4">
           <h1 className="text-xl font-bold tracking-tight text-red-500">
-            freightPOP
+            User Menu
           </h1>
           <div className="flex items-center gap-2 text-white">
             <Link
@@ -120,7 +122,7 @@ export default function DashboardMenuPage() {
                 className="flex items-center gap-3 px-4 py-3 bg-slate-50 text-slate-900 font-medium"
               >
                 <IconHome className="h-5 w-5 flex-shrink-0 text-slate-700" />
-                <span>Dashboard</span>
+                <span>User Dashboard</span>
                 <IconChevronRight className="ml-auto h-5 w-5 flex-shrink-0 text-slate-400" />
               </Link>
               <Link
@@ -128,7 +130,7 @@ export default function DashboardMenuPage() {
                 className="flex items-center gap-3 px-4 py-3 bg-slate-50 text-slate-900 font-medium"
               >
                 <IconProfile className="h-5 w-5 flex-shrink-0 text-slate-700" />
-                <span>Profile</span>
+                <span>User Profile</span>
                 <IconChevronRight className="ml-auto h-5 w-5 flex-shrink-0 text-slate-400" />
               </Link>
             </div>
@@ -142,17 +144,17 @@ export default function DashboardMenuPage() {
             <div className="divide-y divide-slate-100">
               <Link href="/dashboard/daily-check-in" className="flex items-center gap-3 px-4 py-3 text-slate-700 hover:bg-slate-50">
                 <IconCalendarCheck className="h-5 w-5 flex-shrink-0 text-slate-600" />
-                <span>Daily Check-In</span>
+                <span>User Daily Check-In</span>
                 <IconChevronRight className="ml-auto h-5 w-5 flex-shrink-0 text-slate-400" />
               </Link>
-              <Link href="/dashboard" className="flex items-center gap-3 px-4 py-3 text-slate-700 hover:bg-slate-50">
+              <Link href="/dashboard/last-event" className="flex items-center gap-3 px-4 py-3 text-slate-700 hover:bg-slate-50">
                 <IconCalendarStar className="h-5 w-5 flex-shrink-0 text-slate-600" />
-                <span>Last Event</span>
+                <span>User Last Event</span>
                 <IconChevronRight className="ml-auto h-5 w-5 flex-shrink-0 text-slate-400" />
               </Link>
-              <Link href="/dashboard" className="flex items-center gap-3 px-4 py-3 text-slate-700 hover:bg-slate-50">
+              <Link href="/dashboard/contact-us" className="flex items-center gap-3 px-4 py-3 text-slate-700 hover:bg-slate-50">
                 <IconHeadset className="h-5 w-5 flex-shrink-0 text-slate-600" />
-                <span>Contact Us</span>
+                <span>User Contact Us</span>
                 <IconChevronRight className="ml-auto h-5 w-5 flex-shrink-0 text-slate-400" />
               </Link>
             </div>
@@ -164,7 +166,7 @@ export default function DashboardMenuPage() {
               Info
             </p>
             <div className="divide-y divide-slate-100">
-              <Link href="/dashboard" className="flex items-center gap-3 px-4 py-3 text-slate-700 hover:bg-slate-50">
+              <Link href="/profile/about/terms-and-conditions" className="flex items-center gap-3 px-4 py-3 text-slate-700 hover:bg-slate-50">
                 <IconDocument className="h-5 w-5 flex-shrink-0 text-slate-600" />
                 <span>T&C</span>
                 <IconChevronRight className="ml-auto h-5 w-5 flex-shrink-0 text-slate-400" />

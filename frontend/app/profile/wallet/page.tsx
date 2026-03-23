@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { getAuthUser, getToken } from "@/lib/auth-store";
 
 export default function ProfileWalletPage() {
   const router = useRouter();
@@ -18,9 +18,10 @@ export default function ProfileWalletPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const saved = window.localStorage.getItem("adminEmail");
-    const remembered = window.localStorage.getItem("adminRemember");
-    if (!saved && remembered !== "true") {
+    const token = getToken();
+    const user = getAuthUser();
+    const isUserSession = !!token && !!user && user.role !== "admin" && user.role !== "super_admin";
+    if (!isUserSession) {
       router.replace("/login");
       return;
     }
@@ -61,8 +62,9 @@ export default function ProfileWalletPage() {
     <main className="min-h-screen bg-white dark:bg-slate-900">
       <header className="sticky top-0 z-20 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <div className="flex min-h-[3rem] items-center justify-center px-4">
-          <Link
-            href="/profile"
+          <button
+            type="button"
+            onClick={() => (typeof window !== "undefined" && window.history.length > 1 ? router.back() : router.push("/profile"))}
             className="absolute left-4 flex items-center text-slate-900 dark:text-slate-100 hover:text-slate-600 dark:hover:text-slate-300"
             aria-label="Back to profile"
           >
@@ -75,9 +77,9 @@ export default function ProfileWalletPage() {
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
-          </Link>
+          </button>
           <h1 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">
-            BANK
+            User Wallet
           </h1>
         </div>
       </header>

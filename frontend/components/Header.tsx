@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import Image from "next/image";
+import { clearAuth, getAuthUser, getToken } from "@/lib/auth-store";
 
 function HamburgerIcon({ className }: { className?: string }) {
   return (
@@ -23,16 +25,6 @@ function HamburgerIcon({ className }: { className?: string }) {
   );
 }
 
-const primaryNav = [
-  { label: "Home", href: "#", active: true },
-  { label: "FreightPOP Intelligence", href: "#" },
-  { label: "Solutions", href: "#" },
-  { label: "Resources", href: "#" },
-  { label: "Pricing", href: "#" },
-  { label: "Partners", href: "#" },
-  { label: "About Us", href: "/profile/about" },
-];
-
 export function Header() {
   const pathname = usePathname();
   const router = useRouter();
@@ -41,12 +33,17 @@ export function Header() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const remembered = window.localStorage.getItem("adminRemember") === "true";
-    const hasEmail = !!window.localStorage.getItem("adminEmail");
-    setIsLoggedIn(remembered || hasEmail);
+    const token = getToken();
+    const user = getAuthUser();
+    const userLoggedIn = !!token && !!user && user.role !== "admin" && user.role !== "super_admin";
+    setIsLoggedIn(userLoggedIn);
   }, [pathname]);
 
   const isProfileActive = pathname === "/profile";
+
+  if (!isLoggedIn) {
+    return null;
+  }
 
   return (
     <header className="z-40 border-b border-white/10 bg-[#020b2f] text-white">
@@ -68,47 +65,18 @@ export function Header() {
             href={isLoggedIn ? "/dashboard" : "/"}
             className="flex items-center gap-2"
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-white text-xs font-semibold text-[#020b2f]">
-              FP
-            </div>
-            <span className="text-sm font-semibold tracking-wide text-white">
-              FreightPOP
-            </span>
+            <Image
+              src="/images/freightpop-logo.png"
+              alt="FreightPOP"
+              width={140}
+              height={32}
+              className="h-8 w-auto"
+              priority
+            />
           </Link>
         </div>
 
-        <nav className="hidden items-center gap-6 text-xs md:flex">
-          {primaryNav.map((item) => (
-            <Link
-              key={item.label}
-              href={item.href}
-              className={`pb-1 transition-colors ${
-                item.active
-                  ? "border-b-2 border-white font-semibold text-white"
-                  : "text-sky-100/80 hover:text-white"
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-
-        <div className="flex items-center gap-3">
-          {!isLoggedIn && (
-            <Link
-              href="/login"
-              className="hidden h-9 items-center justify-center rounded-full border border-white/30 px-3 text-xs font-medium text-sky-100 hover:border-white md:inline-flex"
-            >
-              Login
-            </Link>
-          )}
-          <Link
-            href="/demo"
-            className="inline-flex h-9 items-center justify-center rounded-full bg-[#3b82f6] px-4 text-xs font-semibold text-white shadow hover:bg-[#2563eb]"
-          >
-            Get a Demo
-          </Link>
-        </div>
+        <div className="flex items-center gap-3" />
       </div>
       {isLoggedIn && isProfileOpen && (
         <div
@@ -137,22 +105,6 @@ export function Header() {
             </div>
             <nav className="flex-1 overflow-y-auto p-4 text-sm text-sky-100/90">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-sky-200/70">
-                Navigation
-              </p>
-              <ul className="space-y-0.5">
-                {primaryNav.map((item) => (
-                  <li key={item.label}>
-                    <Link
-                      href={item.href}
-                      className="block rounded-md px-3 py-2.5 hover:bg-white/5"
-                      onClick={() => setIsProfileOpen(false)}
-                    >
-                      {item.label}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-              <p className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wider text-sky-200/70">
                 Account
               </p>
               <ul className="space-y-0.5">
@@ -216,10 +168,7 @@ export function Header() {
                   type="button"
                   className="w-full rounded-lg bg-[#2563eb] py-2.5 text-sm font-medium text-white hover:bg-[#1d4ed8]"
                   onClick={() => {
-                    if (typeof window !== "undefined") {
-                      window.localStorage.removeItem("adminEmail");
-                      window.localStorage.removeItem("adminRemember");
-                    }
+                    clearAuth("user");
                     setIsProfileOpen(false);
                     router.replace("/login");
                   }}

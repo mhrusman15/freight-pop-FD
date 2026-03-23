@@ -1,0 +1,15 @@
+PORT=4000
+NODE_ENV=development
+
+# Leave DATABASE_URL empty (or set USE_MEMORY_STORE=1) to run without PostgreSQL - admin is auto-seeded.
+# Otherwise set your PostgreSQL connection string:
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/freight_pop
+DATABASE_URL=
+
+# JWT secret - use a long random string in production
+JWT_SECRET=your-super-secret-jwt-key-change-in-production
+JWT_EXPIRES_IN=7d
+
+# Admin seed (optional - used by db:seed to create first admin)
+ADMIN_EMAIL=admin@gmail.com
+ADMIN_PASSWORD=admin@321@123

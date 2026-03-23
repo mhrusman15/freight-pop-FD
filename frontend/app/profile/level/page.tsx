@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 const PROFIT_RATES: Record<number, string> = {
@@ -173,16 +172,17 @@ export default function ProfileLevelPage() {
       {/* Top header: back + centered "Level" + divider */}
       <header className="sticky top-0 z-20 bg-white">
         <div className="flex min-h-[3rem] items-center justify-center px-4">
-          <Link
-            href="/profile"
+          <button
+            type="button"
+            onClick={() => (typeof window !== "undefined" && window.history.length > 1 ? router.back() : router.push("/profile"))}
             className="absolute left-4 flex items-center text-slate-900 hover:text-slate-600"
             aria-label="Back to profile"
           >
             <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
-          </Link>
-          <h1 className="text-lg font-bold text-slate-900">Level</h1>
+          </button>
+          <h1 className="text-lg font-bold text-slate-900">User Level</h1>
         </div>
         <div className="h-px bg-slate-200" aria-hidden />
       </header>

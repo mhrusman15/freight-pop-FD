@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { authApi } from "@/lib/api";
+import { getToken } from "@/lib/auth-store";
 
 type TabId = "withdrawal" | "login";
 
@@ -84,32 +85,47 @@ export default function ProfileSecurityPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const token = getToken();
     const saved = window.localStorage.getItem("adminEmail");
     const remembered = window.localStorage.getItem("adminRemember");
-    if (!saved && remembered !== "true") {
+    if (!token && !saved && remembered !== "true") {
       router.replace("/login");
       return;
     }
     setMounted(true);
   }, [router]);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
     setLoginSuccess(false);
-    const currentPassword =
-      (typeof window !== "undefined" && window.localStorage.getItem("adminLoginPassword")) ||
-      "test@321@123";
-    if (loginForm.oldPassword !== currentPassword) {
-      setLoginError("Old password is incorrect.");
-      return;
-    }
     if (loginForm.newPassword.length < 6) {
       setLoginError("New password must be at least 6 characters.");
       return;
     }
     if (loginForm.newPassword !== loginForm.confirmPassword) {
       setLoginError("New password and confirm password do not match.");
+      return;
+    }
+    const token = getToken();
+    if (token) {
+      const result = await authApi.changePassword({
+        oldPassword: loginForm.oldPassword,
+        newPassword: loginForm.newPassword,
+      });
+      if (result.error) {
+        setLoginError(result.error);
+        return;
+      }
+      setLoginForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
+      setLoginSuccess(true);
+      return;
+    }
+    const currentPassword =
+      (typeof window !== "undefined" && window.localStorage.getItem("adminLoginPassword")) ||
+      "test@321@123";
+    if (loginForm.oldPassword !== currentPassword) {
+      setLoginError("Old password is incorrect.");
       return;
     }
     if (typeof window !== "undefined") {
@@ -154,8 +170,9 @@ export default function ProfileSecurityPage() {
     <main className="min-h-screen bg-white dark:bg-slate-900">
       <header className="sticky top-0 z-20 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <div className="flex min-h-[3rem] items-center justify-center px-4">
-          <Link
-            href="/profile"
+          <button
+            type="button"
+            onClick={() => (typeof window !== "undefined" && window.history.length > 1 ? router.back() : router.push("/profile"))}
             className="absolute left-4 flex items-center text-slate-900 dark:text-slate-100 hover:text-slate-600 dark:hover:text-slate-300"
             aria-label="Back to profile"
           >
@@ -168,8 +185,8 @@ export default function ProfileSecurityPage() {
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
-          </Link>
-          <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">Security Center</h1>
+          </button>
+          <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">User Security</h1>
         </div>
       </header>
 

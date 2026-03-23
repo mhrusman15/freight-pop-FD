@@ -1,14 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useAssetBalance } from "@/lib/use-asset-balance";
+import { getAssetBalance, subtractFromAssetBalance } from "@/lib/asset-balance-store";
+import { authApi } from "@/lib/api";
+import { getAuthUser, getToken } from "@/lib/auth-store";
 
 const WITHDRAW_METHODS = ["BANK"] as const;
 
 export default function ProfileWithdrawPage() {
   const router = useRouter();
+  const { balance: assetBalance, formatted: assetBalanceFormatted, refetch: refetchBalance } = useAssetBalance();
   const [mounted, setMounted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [method, setMethod] = useState<string>("");
   const [formData, setFormData] = useState({
@@ -17,12 +22,14 @@ export default function ProfileWithdrawPage() {
     cashOutAmount: "",
     withdrawalPassword: "",
   });
+  const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const saved = window.localStorage.getItem("adminEmail");
-    const remembered = window.localStorage.getItem("adminRemember");
-    if (!saved && remembered !== "true") {
+    const token = getToken();
+    const user = getAuthUser();
+    const isUserSession = !!token && !!user && user.role !== "admin" && user.role !== "super_admin";
+    if (!isUserSession) {
       router.replace("/login");
       return;
     }
@@ -33,9 +40,37 @@ export default function ProfileWithdrawPage() {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Form submission logic can be added here
+    setSubmitError("");
+    const amount = parseFloat(formData.cashOutAmount.replace(/,/g, "").trim());
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setSubmitError("Enter a valid amount.");
+      return;
+    }
+    const token = getToken();
+    const current = token ? assetBalance : getAssetBalance();
+    if (amount > current) {
+      setSubmitError("Insufficient balance.");
+      return;
+    }
+    setSubmitting(true);
+    if (token) {
+      const result = await authApi.withdraw(amount);
+      setSubmitting(false);
+      if (result.error) {
+        setSubmitError(result.error);
+        return;
+      }
+      refetchBalance();
+      setFormData((prev) => ({ ...prev, cashOutAmount: "", withdrawalPassword: "" }));
+      router.push("/profile");
+      return;
+    }
+    subtractFromAssetBalance(amount);
+    setSubmitting(false);
+    setFormData((prev) => ({ ...prev, cashOutAmount: "", withdrawalPassword: "" }));
+    router.push("/profile");
   };
 
   if (!mounted) {
@@ -62,8 +97,9 @@ export default function ProfileWithdrawPage() {
     <main className="min-h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
       <header className="sticky top-0 z-20 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <div className="flex min-h-[3rem] items-center justify-center px-4">
-          <Link
-            href="/profile"
+          <button
+            type="button"
+            onClick={() => (typeof window !== "undefined" && window.history.length > 1 ? router.back() : router.push("/profile"))}
             className="absolute left-4 flex items-center text-slate-900 dark:text-slate-100 hover:text-slate-600 dark:hover:text-slate-300"
             aria-label="Back to profile"
           >
@@ -76,8 +112,8 @@ export default function ProfileWithdrawPage() {
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
-          </Link>
-          <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">Withdraw</h1>
+          </button>
+          <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">User Withdraw</h1>
         </div>
       </header>
 
@@ -101,7 +137,9 @@ export default function ProfileWithdrawPage() {
               </svg>
               Asset Balance
             </span>
-            <span className="font-semibold text-slate-900 dark:text-slate-100">Rs 20341.15</span>
+            <span className="font-semibold text-slate-900 dark:text-slate-100">
+              {assetBalanceFormatted}
+            </span>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -253,11 +291,15 @@ export default function ProfileWithdrawPage() {
               </div>
             </div>
 
+            {submitError && (
+              <p className="text-sm text-red-600 dark:text-red-400">{submitError}</p>
+            )}
             <button
               type="submit"
-              className="w-full rounded-lg bg-blue-600 py-3.5 text-base font-semibold text-white shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+              disabled={submitting}
+              className="w-full rounded-lg bg-blue-600 py-3.5 text-base font-semibold text-white shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 disabled:opacity-70"
             >
-              Confirm
+              {submitting ? "Processing…" : "Confirm"}
             </button>
           </form>
         </div>
