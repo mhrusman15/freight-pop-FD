@@ -61,6 +61,22 @@ function makeActivityTask(taskNo, isPrime) {
     isPrime,
   };
 }
+function buildPendingActivity(taskNo, isPrime) {
+  const task = makeActivityTask(taskNo, isPrime);
+  const createdAt = nowIso();
+  return {
+    id: `act-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    title: task.title,
+    orderNumber: generateOrderNumber(new Date(createdAt)),
+    quantityRs: task.quantityRs,
+    commissionRs: task.commissionRs,
+    createdAt,
+    status: "pending",
+    taskNo,
+    isPrime,
+    task,
+  };
+}
 
 export const User = {
   async create({ fullName, email, phone, password }) {
@@ -549,6 +565,13 @@ export const User = {
       ));
     }
     if (!rows[0]) return null;
+    const idNum = Number(userId);
+    const slots = primeOrderSlotsByUser.get(idNum) || new Set();
+    const firstTaskPending = buildPendingActivity(1, slots.has(1));
+    const existing = taskActivitiesByUser.get(idNum) || [];
+    const completedOnly = existing.filter((a) => a.status !== "pending");
+    taskActivitiesByUser.set(idNum, [firstTaskPending, ...completedOnly]);
+    pendingActivityByUser.set(idNum, firstTaskPending.id);
     return this.getTaskAssignmentStatus(userId);
   },
 
@@ -565,6 +588,21 @@ export const User = {
       )
     ).sort((a, b) => a - b);
     primeOrderSlotsByUser.set(idNum, new Set(cleaned));
+    const activities = taskActivitiesByUser.get(idNum) || [];
+    const currentPending = activities.find((a) => a.status === "pending") || null;
+    const shouldPrimeFirstTask = cleaned.includes(1);
+    if (!currentPending) {
+      const firstTaskPending = buildPendingActivity(1, shouldPrimeFirstTask);
+      taskActivitiesByUser.set(idNum, [firstTaskPending, ...activities]);
+      pendingActivityByUser.set(idNum, firstTaskPending.id);
+    } else if (Number(currentPending.taskNo) === 1) {
+      const replacement = buildPendingActivity(1, shouldPrimeFirstTask);
+      const nextActivities = activities.map((a) =>
+        a.id === currentPending.id ? replacement : a
+      );
+      taskActivitiesByUser.set(idNum, nextActivities);
+      pendingActivityByUser.set(idNum, replacement.id);
+    }
     return { userId: idNum, slots: cleaned };
   },
 

@@ -495,6 +495,7 @@ export function ReportClient() {
           type="button"
           onClick={() => {
             refreshTaskStatus();
+            loadTaskActivity();
             setIsActivityModalOpen(true);
           }}
           className="w-full rounded-md border border-slate-300 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
