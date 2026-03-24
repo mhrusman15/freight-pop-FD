@@ -11,6 +11,11 @@ const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
+// Same response as /health so opening the site root shows {"ok":true} in the browser.
+app.get("/", (req, res) => {
+  res.json({ ok: true });
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/user", userRoutes);
