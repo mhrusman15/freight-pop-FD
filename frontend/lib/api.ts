@@ -1,6 +1,21 @@
 import { clearAuth, getRefreshToken, getToken, setAccessToken } from "./auth-store";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+function resolveApiBase(): string {
+  const envBase = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (envBase) return envBase.replace(/\/$/, "");
+
+  // In deployed environments, call the co-hosted backend service route.
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname.toLowerCase();
+    const isLocalHost = host === "localhost" || host === "127.0.0.1";
+    if (!isLocalHost) return `${window.location.origin}/_/backend`;
+  }
+
+  // Local development fallback.
+  return "http://localhost:4000";
+}
+
+const API_BASE = resolveApiBase();
 
 /** Avoid refresh loop on auth endpoints. */
 function shouldAttemptRefresh(path: string): boolean {
