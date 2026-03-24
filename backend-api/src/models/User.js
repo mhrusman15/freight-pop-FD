@@ -27,6 +27,15 @@ function randomInt(min, max) {
 function nowIso() {
   return new Date().toISOString();
 }
+function buildEmailCandidates(emailRaw) {
+  const base = String(emailRaw || "").trim().toLowerCase();
+  if (!base) return [];
+  const set = new Set([base]);
+  // Backward-compatible admin alias support.
+  if (base === "admin@gamil.com") set.add("admin@gmail.com");
+  if (base === "admin@gmail.com") set.add("admin@gamil.com");
+  return [...set];
+}
 function generateOrderNumber(now = new Date()) {
   const pad2 = (n) => String(n).padStart(2, "0");
   const ymdhms =
@@ -68,10 +77,14 @@ export const User = {
 
   async findByEmail(email) {
     if (store) return store.findByEmail(email);
+    const candidates = buildEmailCandidates(email);
+    if (!candidates.length) return null;
     const { rows } = await pool.query(
       `SELECT id, full_name, email, phone, password_hash, status, role, admin_permissions, created_at, asset_balance
-       FROM users WHERE email = $1`,
-      [email.trim().toLowerCase()]
+       FROM users
+       WHERE LOWER(TRIM(email)) = ANY($1::text[])
+       LIMIT 1`,
+      [candidates]
     );
     return rows[0] || null;
   },
