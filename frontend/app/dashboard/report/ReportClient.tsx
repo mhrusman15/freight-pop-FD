@@ -20,6 +20,7 @@ type ActivityEntry = {
   commissionRs: number;
   createdAt: Date;
   status: ActivityStatus;
+  isPrime?: boolean;
 };
 
 function buildCompletedNotifications(
@@ -232,7 +233,7 @@ export function ReportClient() {
     userApi.getTaskActivity().then((res) => {
       if (res.error || !res.data?.entries) {
         setActivityEntries([]);
-        return;
+        return [] as ActivityEntry[];
       }
       const mapped: ActivityEntry[] = res.data.entries.map((e: UserTaskActivityEntry) => ({
         id: e.id,
@@ -242,9 +243,14 @@ export function ReportClient() {
         commissionRs: Number(e.commissionRs || 0),
         createdAt: new Date(e.createdAt),
         status: e.status,
+        isPrime: Boolean(e.isPrime),
       }));
       setActivityEntries(mapped);
+      return mapped;
     });
+
+  const hasPendingPrimeOrder = (entries: ActivityEntry[]) =>
+    entries.some((entry) => entry.status === "pending" && Boolean(entry.isPrime));
 
   useEffect(() => {
     void refreshTaskStatus();
@@ -259,11 +265,16 @@ export function ReportClient() {
     }
     userApi.openTask().then((res) => {
       if (res.error && res.data?.code === "PRIME_ORDER_PENDING") {
-        setFailedMessage("check your acitivty task you get prime order");
-        setToastMessage("Insufficient balance, please recharge and try again");
-        window.setTimeout(() => setToastMessage(""), 2200);
-        setIsFailedModalOpen(true);
-        void loadTaskActivity();
+        void loadTaskActivity().then((entries) => {
+          if (hasPendingPrimeOrder(entries)) {
+            setFailedMessage("check your acitivty task you get prime order");
+            setToastMessage("Insufficient balance, please recharge and try again");
+            window.setTimeout(() => setToastMessage(""), 2200);
+          } else {
+            setFailedMessage("You have unfinished orders, please deal with them in time");
+          }
+          setIsFailedModalOpen(true);
+        });
         return;
       }
       if (res.error || !res.data || !res.data.task) {
@@ -309,9 +320,15 @@ export function ReportClient() {
     userApi.completeTask(activePendingEntryId || undefined).then((res) => {
       if (res.error) {
         if ((res.data as { code?: string } | undefined)?.code === "PRIME_ORDER_PENDING") {
-          setFailedMessage("check your acitivty task you get prime order");
-          setToastMessage("Insufficient balance, please recharge and try again");
-          window.setTimeout(() => setToastMessage(""), 2200);
+          void loadTaskActivity().then((entries) => {
+            if (hasPendingPrimeOrder(entries)) {
+              setFailedMessage("check your acitivty task you get prime order");
+              setToastMessage("Insufficient balance, please recharge and try again");
+              window.setTimeout(() => setToastMessage(""), 2200);
+            } else {
+              setFailedMessage("You have unfinished orders, please deal with them in time");
+            }
+          });
         } else {
           setFailedMessage("You have unfinished orders, please deal with them in time");
         }
@@ -411,9 +428,32 @@ export function ReportClient() {
   }, [activityEntries, activityTab, taskStatus, isAdminAssignedCyclePending, total]);
 
   const handlePendingDispose = (entry: ActivityEntry) => {
-    void entry;
-    setToastMessage("Insufficient balance, please recharge and try again");
-    window.setTimeout(() => setToastMessage(""), 2200);
+    if (entry.isPrime) {
+      setToastMessage("Insufficient balance, please recharge and try again");
+      window.setTimeout(() => setToastMessage(""), 2200);
+      return;
+    }
+    userApi.completeTask(entry.id).then((res) => {
+      if (res.error) {
+        setFailedMessage("You have unfinished orders, please deal with them in time");
+        setIsFailedModalOpen(true);
+        return;
+      }
+      if (res.data) setTaskStatus(res.data);
+      setActivityEntries((prev) =>
+        prev.map((item) =>
+          item.id === entry.id
+            ? {
+                ...item,
+                status: "completed",
+                orderNumber: generateOrderNumber(new Date()),
+                createdAt: new Date(),
+              }
+            : item,
+        ),
+      );
+      void loadTaskActivity();
+    });
   };
 
   return (
