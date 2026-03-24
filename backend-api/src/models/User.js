@@ -4,28 +4,105 @@ import { memoryStore } from "../store/memory-store.js";
 import bcrypt from "bcryptjs";
 
 const store = config.useMemoryStore ? memoryStore : null;
-const TASK_DAILY_LIMIT = 30;
+const TASK_DAILY_LIMIT = 29;
 const AUTO_ASSIGN_HOURS = 24;
 
 // In-memory list of users whose sessions should be treated as invalid.
 // Used to force logout after sensitive admin actions (e.g. balance change).
 const invalidatedUserIds = new Set();
-const primeOrderSlotsByUser = new Map(); // userId -> Set(1..30)
+const primeOrderSlotsByUser = new Map(); // userId -> Set(1..TASK_DAILY_LIMIT)
 const taskActivitiesByUser = new Map(); // userId -> [{...}]
 const pendingActivityByUser = new Map(); // userId -> activityId
 
 const TASK_CATALOG = [
   { title: "Luxury Order", image: "/assets/tasks/Girl-bag.jpg", min: 55000, max: 65000, commissionMin: 1800, commissionMax: 2600 },
   { title: "Brand Vault", image: "/assets/tasks/Man-Watch.jpg", min: 42000, max: 58000, commissionMin: 1200, commissionMax: 1900 },
-  { title: "Prime Select", image: "/assets/tasks/perfume.png", min: 30000, max: 52000, commissionMin: 950, commissionMax: 1500 },
   { title: "Elite Choice", image: "/assets/tasks/Man-Shoes.jpg", min: 20000, max: 35000, commissionMin: 700, commissionMax: 1200 },
 ];
+const TASK_IMAGE_POOL = [
+  "/assets/tasks/Man-Shoes.jpg",
+  "/assets/tasks/Woman-shoes.jpg",
+  "/assets/tasks/heals.jpg",
+  "/assets/tasks/Shoes-men.jpg",
+  "/assets/tasks/Men-Jacket.jpg",
+  "/assets/tasks/Man-Watch.jpg",
+  "/assets/tasks/Woman-watch.jpg",
+  "/assets/tasks/Health-watch.jpg",
+  "/assets/tasks/Smart Watch.jpg",
+  "/assets/tasks/Clock.jpg",
+  "/assets/tasks/Sony-headphone.jpg",
+  "/assets/tasks/Girl-bag.jpg",
+  "/assets/tasks/laptop-bag.jpg",
+  "/assets/tasks/Girl-Stoler.jpg",
+  "/assets/tasks/Laptop.jpg",
+  "/assets/tasks/ipad.jpg",
+  "/assets/tasks/USB-128Gb.jpg",
+  "/assets/tasks/speaker.jpg",
+  "/assets/tasks/glasses.jpg",
+  "/assets/tasks/Bike-Helmet.jpg",
+  "/assets/tasks/Canon-Camera.jpg",
+  "/assets/tasks/Makeup-kit.jpg",
+  "/assets/tasks/Toy.jpg",
+  "/assets/tasks/Toy-gun.jpg",
+  "/assets/tasks/Tree-light.jpg",
+  "/assets/tasks/purfume.jpg",
+  "/assets/tasks/charger.jpg",
+  "/assets/tasks/earring.jpg",
+  "/assets/tasks/study-table.jpg",
+  "/assets/tasks/toolbox.jpg",
+  "/assets/tasks/voltmeter.jpg",
+  "/assets/tasks/water-bottle.jpg",
+];
+const imageCyclesByUser = new Map(); // userId -> { index, sequence }
 
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 function nowIso() {
   return new Date().toISOString();
+}
+function imagePathToTitle(imagePath) {
+  const file = String(imagePath || "").split("/").pop() || "task";
+  return file.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+}
+function shuffle(arr) {
+  const next = [...arr];
+  for (let i = next.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [next[i], next[j]] = [next[j], next[i]];
+  }
+  return next;
+}
+function pickItemsWithReplacement(source, count) {
+  const out = [];
+  if (!source.length || count <= 0) return out;
+  for (let i = 0; i < count; i += 1) {
+    out.push(source[randomInt(0, source.length - 1)]);
+  }
+  return out;
+}
+function buildImageCycles() {
+  const base = shuffle(TASK_IMAGE_POOL);
+  // Cycle through the full image pool first so users see broad variety
+  // (well over 15-16 unique images) before any repeat.
+  const sequence = base.length
+    ? base
+    : pickItemsWithReplacement(TASK_IMAGE_POOL, TASK_DAILY_LIMIT);
+  return { index: 0, sequence };
+}
+function nextTaskImageForUser(userId) {
+  const idNum = Number(userId);
+  const state = imageCyclesByUser.get(idNum) || buildImageCycles();
+  const image = state.sequence[state.index] || TASK_IMAGE_POOL[0];
+  state.index += 1;
+  // Reset only after consuming the full prepared sequence.
+  if (state.index >= state.sequence.length) {
+    const refreshed = buildImageCycles();
+    state.index = refreshed.index;
+    state.sequence = refreshed.sequence;
+  }
+  imageCyclesByUser.set(idNum, state);
+  return image;
 }
 function buildEmailCandidates(emailRaw) {
   const base = String(emailRaw || "").trim().toLowerCase();
@@ -61,8 +138,16 @@ function makeActivityTask(taskNo, isPrime) {
     isPrime,
   };
 }
-function buildPendingActivity(taskNo, isPrime) {
+function makeUserTask(userId, taskNo, isPrime) {
   const task = makeActivityTask(taskNo, isPrime);
+  if (!isPrime) {
+    task.image = nextTaskImageForUser(userId);
+    task.title = imagePathToTitle(task.image);
+  }
+  return task;
+}
+function buildPendingActivity(userId, taskNo, isPrime) {
+  const task = makeUserTask(userId, taskNo, isPrime);
   const createdAt = nowIso();
   return {
     id: `act-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
@@ -484,6 +569,10 @@ export const User = {
     if (store) {
       const status = await store.markTaskCompleted(userId);
       if (status?.code) return status;
+      // Keep runtime asset balance consistent with completed task commission.
+      if (Number.isFinite(Number(targetPending.commissionRs)) && Number(targetPending.commissionRs) > 0) {
+        await store.addToBalance(userId, Number(targetPending.commissionRs));
+      }
       const now = nowIso();
       const nextActivities = activities.map((a) =>
         a.id === targetPending.id ? { ...a, status: "completed", completedAt: now } : a
@@ -502,12 +591,13 @@ export const User = {
       const { rows } = await pool.query(
         `UPDATE users
          SET task_quota_used = COALESCE(task_quota_used, 0) + 1,
+             asset_balance = COALESCE(asset_balance, 0) + $3,
              task_quota_total = COALESCE(task_quota_total, $2),
              updated_at = NOW()
          WHERE id = $1
          RETURNING COALESCE(task_quota_total, $2)::int AS task_quota_total,
                    COALESCE(task_quota_used, 0)::int AS task_quota_used`,
-        [userId, TASK_DAILY_LIMIT]
+        [userId, TASK_DAILY_LIMIT, Math.max(0, Number(targetPending.commissionRs) || 0)]
       );
       if (!rows[0]) return { error: "User not found", code: "NOT_FOUND" };
       const total = Number(rows[0].task_quota_total || TASK_DAILY_LIMIT);
@@ -539,7 +629,19 @@ export const User = {
   },
 
   async adminAssignTasks(userId) {
-    if (store) return store.adminAssignTasks(userId);
+    const idNum = Number(userId);
+    // Fresh assignment should clear any previously configured prime slots.
+    primeOrderSlotsByUser.delete(idNum);
+    if (store) {
+      const status = await store.adminAssignTasks(userId);
+      if (!status) return null;
+      const firstTaskPending = buildPendingActivity(idNum, 1, false);
+      const existing = taskActivitiesByUser.get(idNum) || [];
+      const completedOnly = existing.filter((a) => a.status !== "pending");
+      taskActivitiesByUser.set(idNum, [firstTaskPending, ...completedOnly]);
+      pendingActivityByUser.set(idNum, firstTaskPending.id);
+      return status;
+    }
     let rows;
     try {
       ({ rows } = await pool.query(
@@ -565,9 +667,9 @@ export const User = {
       ));
     }
     if (!rows[0]) return null;
-    const idNum = Number(userId);
-    const slots = primeOrderSlotsByUser.get(idNum) || new Set();
-    const firstTaskPending = buildPendingActivity(1, slots.has(1));
+    const slots = new Set();
+    imageCyclesByUser.set(idNum, buildImageCycles());
+    const firstTaskPending = buildPendingActivity(idNum, 1, slots.has(1));
     const existing = taskActivitiesByUser.get(idNum) || [];
     const completedOnly = existing.filter((a) => a.status !== "pending");
     taskActivitiesByUser.set(idNum, [firstTaskPending, ...completedOnly]);
@@ -584,19 +686,31 @@ export const User = {
       new Set(
         (Array.isArray(slots) ? slots : [])
           .map((n) => Number(n))
-          .filter((n) => Number.isInteger(n) && n >= 1 && n <= 30)
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= TASK_DAILY_LIMIT)
       )
     ).sort((a, b) => a - b);
     primeOrderSlotsByUser.set(idNum, new Set(cleaned));
     const activities = taskActivitiesByUser.get(idNum) || [];
     const currentPending = activities.find((a) => a.status === "pending") || null;
-    const shouldPrimeFirstTask = cleaned.includes(1);
     if (!currentPending) {
-      const firstTaskPending = buildPendingActivity(1, shouldPrimeFirstTask);
-      taskActivitiesByUser.set(idNum, [firstTaskPending, ...activities]);
-      pendingActivityByUser.set(idNum, firstTaskPending.id);
-    } else if (Number(currentPending.taskNo) === 1) {
-      const replacement = buildPendingActivity(1, shouldPrimeFirstTask);
+      const status = await this.getTaskAssignmentStatus(idNum);
+      if (!status || !status.canPerformTasks) {
+        return { userId: idNum, slots: cleaned };
+      }
+      const nextTaskNo = Math.min(
+        TASK_DAILY_LIMIT,
+        Math.max(1, Number(status.quotaUsed || 0) + 1)
+      );
+      const nextPending = buildPendingActivity(
+        idNum,
+        nextTaskNo,
+        cleaned.includes(nextTaskNo)
+      );
+      taskActivitiesByUser.set(idNum, [nextPending, ...activities]);
+      pendingActivityByUser.set(idNum, nextPending.id);
+    } else {
+      const currentTaskNo = Number(currentPending.taskNo) || 1;
+      const replacement = buildPendingActivity(idNum, currentTaskNo, cleaned.includes(currentTaskNo));
       const nextActivities = activities.map((a) =>
         a.id === currentPending.id ? replacement : a
       );
@@ -641,7 +755,7 @@ export const User = {
     }
     const taskNo = Number(status.quotaUsed || 0) + 1;
     const isPrime = Boolean(primeOrderSlotsByUser.get(idNum)?.has(taskNo));
-    const task = makeActivityTask(taskNo, isPrime);
+    const task = makeUserTask(idNum, taskNo, isPrime);
     const createdAt = nowIso();
     const activity = {
       id: `act-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,

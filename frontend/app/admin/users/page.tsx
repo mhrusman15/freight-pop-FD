@@ -5,6 +5,7 @@ import { adminApi, type AdminUserRow } from "@/lib/api";
 import { canAdmin, getAdminPermission, isSuperAdmin } from "@/lib/auth-store";
 
 const PAGE_SIZE = 10;
+const TASK_ASSIGN_LIMIT = 29;
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString("en-US", {
@@ -36,6 +37,7 @@ export default function AdminUsersPage() {
   const [primeModalUser, setPrimeModalUser] = useState<AdminUserRow | null>(null);
   const [primeSlots, setPrimeSlots] = useState<number[]>([]);
   const [savingPrime, setSavingPrime] = useState(false);
+  const [primeAssignMode, setPrimeAssignMode] = useState<"prime_only" | "assign_with_prime">("prime_only");
 
   const load = useCallback(
     async (pageNum = 1) => {
@@ -83,37 +85,48 @@ export default function AdminUsersPage() {
 
   const handleAssignTasks = async (user: AdminUserRow) => {
     if (!canBalance) return;
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        `Assign fresh 30 tasks for ${user.full_name} (${user.email})?`
-      );
-      if (!confirmed) return;
-    }
-    setAssigningId(user.id);
+    setPrimeAssignMode("assign_with_prime");
+    setPrimeModalUser(user);
+    setPrimeSlots([]);
     setError("");
-    setSuccess("");
-    const res = await adminApi.assignUserTasks(user.id);
-    setAssigningId(null);
-    if (res.error) {
-      setError(res.error);
-      return;
-    }
-    setSuccess("30 tasks assigned successfully.");
-    load(page);
+    setSuccess(
+      `Select prime order numbers for ${user.full_name}. If no prime order, select 0 and save.`
+    );
   };
 
   const togglePrimeSlot = (slot: number) => {
-    setPrimeSlots((prev) =>
-      prev.includes(slot) ? prev.filter((x) => x !== slot) : [...prev, slot].sort((a, b) => a - b)
-    );
+    setPrimeSlots((prev) => {
+      // Slot 0 means "no prime order for all tasks".
+      if (slot === 0) return prev.includes(0) ? [] : [0];
+      const withoutZero = prev.filter((x) => x !== 0);
+      return withoutZero.includes(slot)
+        ? withoutZero.filter((x) => x !== slot)
+        : [...withoutZero, slot].sort((a, b) => a - b);
+    });
   };
 
   const handleAssignPrimeOrders = async () => {
     if (!primeModalUser) return;
+    if (primeSlots.length === 0) {
+      setError("Please select prime order numbers, or select 0 for no prime orders.");
+      return;
+    }
     setSavingPrime(true);
     setError("");
     setSuccess("");
-    const res = await adminApi.assignPrimeOrders(primeModalUser.id, primeSlots);
+    const normalizedSlots = primeSlots.includes(0) ? [] : primeSlots;
+    if (primeAssignMode === "assign_with_prime") {
+      setAssigningId(primeModalUser.id);
+      const assignRes = await adminApi.assignUserTasks(primeModalUser.id);
+      if (assignRes.error) {
+        setAssigningId(null);
+        setSavingPrime(false);
+        setError(assignRes.error);
+        return;
+      }
+      setAssigningId(null);
+    }
+    const res = await adminApi.assignPrimeOrders(primeModalUser.id, normalizedSlots);
     setSavingPrime(false);
     if (res.error) {
       setError(res.error);
@@ -121,6 +134,9 @@ export default function AdminUsersPage() {
     }
     setSuccess("Prime orders assigned successfully.");
     setPrimeModalUser(null);
+    setPrimeSlots([]);
+    setPrimeAssignMode("prime_only");
+    load(page);
   };
 
   const cancelEdit = () => {
@@ -277,7 +293,7 @@ export default function AdminUsersPage() {
               }}
               className="inline-flex items-center justify-center rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
             >
-              {assigningId === editingId ? "Assigning…" : "Assign 30 tasks"}
+              {assigningId === editingId ? "Assigning…" : `Assign ${TASK_ASSIGN_LIMIT} tasks`}
             </button>
             <button
               type="button"
@@ -286,6 +302,7 @@ export default function AdminUsersPage() {
                 if (!user) return;
                 setPrimeModalUser(user);
                 setPrimeSlots([]);
+                setPrimeAssignMode("prime_only");
               }}
               className="inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-violet-700"
             >
@@ -319,10 +336,25 @@ export default function AdminUsersPage() {
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              Select task numbers (1-30) to mark as prime orders for this user.
+              {primeAssignMode === "assign_with_prime"
+                ? `Select prime order numbers before assigning ${TASK_ASSIGN_LIMIT} tasks. If no prime order, select 0 and save.`
+                : `Select task numbers (1-${TASK_ASSIGN_LIMIT}) to mark as prime orders for this user.`}
             </p>
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => togglePrimeSlot(0)}
+                className={`rounded border px-3 py-1.5 text-xs font-medium ${
+                  primeSlots.includes(0)
+                    ? "border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-500 dark:bg-violet-900/30 dark:text-violet-200"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                }`}
+              >
+                0 - No prime order (all normal)
+              </button>
+            </div>
             <div className="mt-3 grid grid-cols-6 gap-2 sm:grid-cols-10">
-              {Array.from({ length: 30 }, (_, i) => i + 1).map((n) => {
+              {Array.from({ length: TASK_ASSIGN_LIMIT }, (_, i) => i + 1).map((n) => {
                 const checked = primeSlots.includes(n);
                 return (
                   <label
@@ -492,7 +524,7 @@ export default function AdminUsersPage() {
                           onClick={() => handleAssignTasks(user)}
                           className="rounded-md bg-sky-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
                         >
-                          {assigningId === user.id ? "Assigning…" : "Assign 30"}
+                          {assigningId === user.id ? "Assigning…" : `Assign ${TASK_ASSIGN_LIMIT}`}
                         </button>
                       </td>
                     </tr>

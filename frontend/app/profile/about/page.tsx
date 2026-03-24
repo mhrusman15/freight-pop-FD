@@ -103,12 +103,15 @@ export default function ProfileAboutPage() {
           </div>
 
           {/* Version */}
-          <p className="mt-8 text-center text-sm text-slate-600 dark:text-slate-400">
+          <Link
+            href="/profile/about/help"
+            className="mt-8 inline-flex items-center gap-1 text-center text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+          >
             Check version{" "}
             <span className="font-semibold text-slate-900 dark:text-slate-100">
               {APP_VERSION}
             </span>
-          </p>
+          </Link>
         </div>
       </div>
     </main>

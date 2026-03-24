@@ -165,7 +165,7 @@ export async function assignUserTasks(req, res) {
     if (!status) {
       return res.status(404).json({ error: "User not found" });
     }
-    res.json({ message: "30 tasks assigned", status });
+    res.json({ message: "29 tasks assigned", status });
   } catch (err) {
     console.error("Assign tasks error:", err);
     res.status(500).json({ error: "Failed to assign tasks" });

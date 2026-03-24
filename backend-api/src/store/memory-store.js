@@ -23,7 +23,7 @@ async function seedAdmin() {
     role: "super_admin",
     admin_permissions: "full",
     asset_balance: 20341.15,
-    task_quota_total: 30,
+    task_quota_total: 29,
     task_quota_used: 0,
     task_assignment_required: false,
     task_assignment_requested_at: null,
@@ -53,7 +53,7 @@ export const memoryStore = {
       status: "pending",
       role: "user",
       asset_balance: 20341.15,
-      task_quota_total: 30,
+      task_quota_total: 29,
       task_quota_used: 0,
       task_assignment_required: false,
       task_assignment_requested_at: null,
@@ -151,7 +151,7 @@ export const memoryStore = {
       phone: u.phone,
       status: u.status,
       asset_balance: u.asset_balance ?? 20341.15,
-      task_quota_total: u.task_quota_total ?? 30,
+      task_quota_total: u.task_quota_total ?? 29,
       task_quota_used: u.task_quota_used ?? 0,
       task_assignment_required: Boolean(u.task_assignment_required),
       task_assignment_requested_at: u.task_assignment_requested_at || null,
@@ -216,7 +216,7 @@ export const memoryStore = {
       role,
       admin_permissions: adminPermissions,
       asset_balance: 20341.15,
-      task_quota_total: 30,
+      task_quota_total: 29,
       task_quota_used: 0,
       task_assignment_required: false,
       task_assignment_requested_at: null,
@@ -247,7 +247,7 @@ export const memoryStore = {
       role: "admin",
       admin_permissions: adminPermissions,
       asset_balance: 20341.15,
-      task_quota_total: 30,
+      task_quota_total: 29,
       task_quota_used: 0,
       task_assignment_required: false,
       task_assignment_requested_at: null,
@@ -289,7 +289,7 @@ export const memoryStore = {
   async getTaskAssignmentStatus(userId) {
     const u = users.find((x) => x.id === userId);
     if (!u) return null;
-    const total = Number(u.task_quota_total ?? 30);
+    const total = Number(u.task_quota_total ?? 29);
     const used = Number(u.task_quota_used ?? 0);
     const required = Boolean(u.task_assignment_required);
     const requestedAt = u.task_assignment_requested_at
@@ -298,14 +298,14 @@ export const memoryStore = {
     const now = Date.now();
     const autoMs = 24 * 60 * 60 * 1000;
     if ((required || used >= total) && requestedAt && now - requestedAt.getTime() >= autoMs) {
-      u.task_quota_total = 30;
+      u.task_quota_total = 29;
       u.task_quota_used = 0;
       u.task_assignment_required = false;
       u.task_assignment_requested_at = null;
       u.task_assignment_granted_at = nowIso();
       u.updated_at = nowIso();
     }
-    const total2 = Number(u.task_quota_total ?? 30);
+    const total2 = Number(u.task_quota_total ?? 29);
     const used2 = Number(u.task_quota_used ?? 0);
     const required2 = Boolean(u.task_assignment_required);
     return {
@@ -330,7 +330,7 @@ export const memoryStore = {
     if (!status?.canPerformTasks) {
       return { error: "Task assignment required", code: "TASK_ASSIGNMENT_REQUIRED", status };
     }
-    u.task_quota_total = Number(u.task_quota_total ?? 30);
+    u.task_quota_total = Number(u.task_quota_total ?? 29);
     u.task_quota_used = Number(u.task_quota_used ?? 0) + 1;
     if (u.task_quota_used >= u.task_quota_total) {
       u.task_assignment_required = true;
@@ -343,7 +343,7 @@ export const memoryStore = {
   async adminAssignTasks(userId) {
     const u = users.find((x) => x.id === userId && x.role === "user");
     if (!u) return null;
-    u.task_quota_total = 30;
+    u.task_quota_total = 29;
     u.task_quota_used = 0;
     u.task_assignment_required = false;
     u.task_assignment_requested_at = null;

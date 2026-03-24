@@ -8,8 +8,9 @@ import {
   getTitleFromImageName,
   type Task,
 } from "./data/tasks";
-import { formatAssetBalance, getAssetBalance } from "@/lib/asset-balance-store";
+import { formatAssetBalance, getAssetBalance, setAssetBalance } from "@/lib/asset-balance-store";
 import { userApi, type UserTaskActivityEntry, type UserTaskStatus } from "@/lib/api";
+import { getAuthUser } from "@/lib/auth-store";
 
 type ActivityStatus = "pending" | "completed";
 type ActivityEntry = {
@@ -33,16 +34,14 @@ function buildCompletedNotifications(
   const notifications: ActivityEntry[] = [];
   for (let i = 0; i < completed.length; i += cycleSize) {
     const chunk = completed.slice(i, i + cycleSize);
-    if (chunk.length === 0) continue;
+    // Only emit history notification for full cycles (e.g. 29/29).
+    if (chunk.length < cycleSize) continue;
     const latest = chunk[0];
     const totalQuantity = chunk.reduce((sum, entry) => sum + entry.quantityRs, 0);
     const totalCommission = chunk.reduce((sum, entry) => sum + entry.commissionRs, 0);
     notifications.push({
       id: `completed-summary-${latest.id}-${chunk.length}`,
-      title:
-        chunk.length >= cycleSize
-          ? `${cycleSize} Tasks Completed Report`
-          : `${chunk.length} Tasks Completed`,
+      title: `${cycleSize} Tasks Completed Report`,
       orderNumber: `BATCH-${latest.orderNumber}`,
       quantityRs: totalQuantity,
       commissionRs: totalCommission,
@@ -165,6 +164,10 @@ function generateOrderNumber(d: Date): string {
 }
 
 export function ReportClient() {
+  const authUser = getAuthUser();
+  const activityHistoryKey = authUser?.id
+    ? `fp_activity_history_${authUser.id}`
+    : "fp_activity_history_guest";
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
   const [totalCapital, setTotalCapital] = useState<number>(() =>
     getAssetBalance(),
@@ -232,6 +235,19 @@ export function ReportClient() {
   const loadTaskActivity = () =>
     userApi.getTaskActivity().then((res) => {
       if (res.error || !res.data?.entries) {
+        if (typeof window !== "undefined") {
+          try {
+            const raw = window.localStorage.getItem(activityHistoryKey);
+            if (raw) {
+              const parsed = JSON.parse(raw) as Array<ActivityEntry & { createdAt: string }>;
+              const restored = parsed.map((e) => ({ ...e, createdAt: new Date(e.createdAt) }));
+              setActivityEntries(restored);
+              return restored;
+            }
+          } catch {
+            // ignore cache parse issues
+          }
+        }
         setActivityEntries([]);
         return [] as ActivityEntry[];
       }
@@ -246,6 +262,13 @@ export function ReportClient() {
         isPrime: Boolean(e.isPrime),
       }));
       setActivityEntries(mapped);
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(activityHistoryKey, JSON.stringify(mapped));
+        } catch {
+          // ignore storage issues
+        }
+      }
       return mapped;
     });
 
@@ -253,6 +276,15 @@ export function ReportClient() {
     entries.some((entry) => entry.status === "pending" && Boolean(entry.isPrime));
 
   useEffect(() => {
+    userApi.getBalance().then((res) => {
+      if (res.data?.balance != null && Number.isFinite(Number(res.data.balance))) {
+        const serverBalance = Number(res.data.balance);
+        setAssetBalance(serverBalance);
+        setTotalCapital(serverBalance);
+      }
+    }).catch(() => {
+      // Keep local balance fallback when balance endpoint is temporarily unavailable.
+    });
     void refreshTaskStatus();
     void loadTaskActivity();
   }, []);
@@ -368,7 +400,11 @@ export function ReportClient() {
         );
       });
       setActivePendingEntryId(null);
-      setTotalCapital((c) => c + activeTask.commission);
+      setTotalCapital((c) => {
+        const next = c + activeTask.commission;
+        setAssetBalance(next);
+        return next;
+      });
       setInstantProfit((p) => p + activeTask.commission);
       setCurrentTaskIndex((i) => (i + 1) % total);
       setCompletedInCycle((prev) => {
@@ -408,23 +444,33 @@ export function ReportClient() {
   };
 
   const filteredActivityEntries = useMemo(() => {
-    const hasAdminApproval =
-      Boolean(taskStatus?.taskAssignmentGrantedAt) &&
-      !Boolean(taskStatus?.requiresAdminAssignment);
-    if (!hasAdminApproval) return [];
-
     const pendingEntries = activityEntries.filter((e) => e.status === "pending");
-    const completedNotifications = buildCompletedNotifications(activityEntries, total);
+    const pendingPrimeEntry = pendingEntries.find((e) => Boolean(e.isPrime)) || null;
+    // Keep completed history compact: 1 notification per fully completed 29-task cycle.
+    const completedSummaryNotifications = buildCompletedNotifications(activityEntries, total);
+    const primeOrderNotifications: ActivityEntry[] = pendingPrimeEntry
+      ? [
+          {
+            id: `prime-order-notice-${pendingPrimeEntry.id}`,
+            title: "Prime Order Assigned (Action Required)",
+            orderNumber: `Remaining tasks: ${Math.max(0, Number(taskStatus?.remaining ?? 0))}`,
+            quantityRs: pendingPrimeEntry.quantityRs,
+            commissionRs: pendingPrimeEntry.commissionRs,
+            createdAt: pendingPrimeEntry.createdAt,
+            status: "completed",
+            isPrime: true,
+          },
+        ]
+      : [];
     const canShowDisposeEntries =
       isAdminAssignedCyclePending;
     const visiblePendingEntries = canShowDisposeEntries
       ? pendingEntries
       : [];
-    const allEntries = [...visiblePendingEntries, ...completedNotifications];
-
+    const allEntries = [...visiblePendingEntries, ...primeOrderNotifications, ...completedSummaryNotifications];
     if (activityTab === "all") return allEntries;
     if (activityTab === "pending") return visiblePendingEntries;
-    return allEntries.filter((e) => e.status === "completed");
+    return completedSummaryNotifications;
   }, [activityEntries, activityTab, taskStatus, isAdminAssignedCyclePending, total]);
 
   const handlePendingDispose = (entry: ActivityEntry) => {
@@ -491,7 +537,7 @@ export function ReportClient() {
               </span>
               Pursuit
             </p>
-            <p className="text-sm font-semibold">{safeIndex + 1}/30</p>
+            <p className="text-sm font-semibold">{safeIndex + 1}/{total}</p>
           </div>
           <div className="space-y-1">
             <p className="flex items-center gap-1.5 font-medium">
@@ -800,13 +846,13 @@ export function ReportClient() {
               >
                 <div className="space-y-3">
                   <p className="text-right text-sm font-semibold text-slate-800">
-                    Brand Vault
+                    {e.isPrime ? "Prime Order" : "Brand Vault"}
                   </p>
                   <div className="h-px w-full bg-slate-200" />
                 </div>
 
                 <p className="text-lg font-semibold text-slate-900 leading-snug">
-                  {e.title}
+                  {e.isPrime ? "Prime Order" : e.title}
                 </p>
 
                 <div className="text-xs text-slate-700 space-y-1.5">

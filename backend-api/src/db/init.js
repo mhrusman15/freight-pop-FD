@@ -44,7 +44,7 @@ const STATEMENTS = [
   `DO $$
   BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'task_quota_total') THEN
-      ALTER TABLE users ADD COLUMN task_quota_total INTEGER NOT NULL DEFAULT 30;
+      ALTER TABLE users ADD COLUMN task_quota_total INTEGER NOT NULL DEFAULT 29;
     END IF;
   END $$`,
   `DO $$

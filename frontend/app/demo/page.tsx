@@ -43,7 +43,7 @@ export default function DemoPage() {
               </span>
               Pursuit
             </p>
-            <p className="text-xl font-semibold text-slate-900">7/30</p>
+            <p className="text-xl font-semibold text-slate-900">7/29</p>
           </div>
 
           <div className="space-y-1">

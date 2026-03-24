@@ -103,7 +103,7 @@ function LevelCard({
         <ul className="mt-3 list-disc space-y-1 pl-5 text-slate-700">
           <li>Deposit in accordance with our renewal event</li>
           <li>Profit rate: {PROFIT_RATES[level]}</li>
-          <li>Number of assignments: 30</li>
+          <li>Number of assignments: 29</li>
           <li>Better profit and permission</li>
           {isLevel6 && <li>Maximum withdrawal ৳15,00,000</li>}
         </ul>
