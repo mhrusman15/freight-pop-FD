@@ -68,23 +68,23 @@ export default function ProfileAboutHelpDataWelfareOrderPage() {
       <div className="fp-container py-5">
         <div className="mx-auto max-w-md bg-white px-4 py-4 text-[20px] leading-tight text-black dark:bg-slate-800 dark:text-slate-100">
           <p>
-            <strong>What is Luxury Order?</strong>
+            <strong>What is Prime order?</strong>
           </p>
           <p>
-            Luxury Order is a strategic tool created by suppliers and merchants
+            Prime order is a strategic tool created by suppliers and merchants
             to increase the global visibility of their products and attract
             more agents to help boost sales.
           </p>
           <p>
-            By offering Luxury Order, suppliers allow members to earn{" "}
+            By offering Prime order, suppliers allow members to earn{" "}
             <strong>higher commissions</strong>, helping everyone increase their
             potential income.
           </p>
           <p>
-            With Luxury Order, members can earn up to{" "}
+            With Prime order, members can earn up to{" "}
             <strong>5x the regular commission</strong>. However,{" "}
-            <strong>Luxury Order</strong> opportunities are rare - members
-            usually encounter <strong>1 to 2 Luxury Order tasks</strong> per
+            <strong>Prime order</strong> opportunities are rare - members
+            usually encounter <strong>1 to 2 Prime order tasks</strong> per
             round.
           </p>
           <p>

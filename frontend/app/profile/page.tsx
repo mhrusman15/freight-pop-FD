@@ -131,7 +131,7 @@ export default function ProfilePage() {
               </li>
               <li>
                 <Link
-                  href="#"
+                  href="/profile/contact-us"
                   className="flex items-center justify-between rounded-lg px-3 py-2.5 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50"
                 >
                   Contact Us
@@ -163,7 +163,7 @@ export default function ProfilePage() {
               </li>
               <li>
                 <Link
-                  href="#"
+                  href="/profile/account-details"
                   className="flex items-center justify-between rounded-lg px-3 py-2.5 text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   Account Details

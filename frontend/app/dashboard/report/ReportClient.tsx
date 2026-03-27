@@ -5,6 +5,7 @@ import Image from "next/image";
 import {
   TOTAL_TASKS,
   createRandomTask,
+  getNextTaskImage,
   getTitleFromImageName,
   type Task,
 } from "./data/tasks";
@@ -24,6 +25,8 @@ type ActivityEntry = {
   isPrime?: boolean;
 };
 
+const INITIAL_PROTECTED_RESERVE = 20000;
+
 function buildCompletedNotifications(
   entries: ActivityEntry[],
   cycleSize: number,
@@ -34,7 +37,7 @@ function buildCompletedNotifications(
   const notifications: ActivityEntry[] = [];
   for (let i = 0; i < completed.length; i += cycleSize) {
     const chunk = completed.slice(i, i + cycleSize);
-    // Only emit history notification for full cycles (e.g. 29/29).
+    // Only emit history notification for full cycles (e.g. 30/30).
     if (chunk.length < cycleSize) continue;
     const latest = chunk[0];
     const totalQuantity = chunk.reduce((sum, entry) => sum + entry.quantityRs, 0);
@@ -169,11 +172,11 @@ export function ReportClient() {
     ? `fp_activity_history_${authUser.id}`
     : "fp_activity_history_guest";
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
-  const [totalCapital, setTotalCapital] = useState<number>(() =>
-    getAssetBalance(),
-  );
+  // For a new account, report must start from 0 and then sync from server balance.
+  const [totalCapital, setTotalCapital] = useState<number>(0);
   const [instantProfit, setInstantProfit] = useState(0);
   const [completedInCycle, setCompletedInCycle] = useState(0);
+  const protectedReserve = INITIAL_PROTECTED_RESERVE;
   const [activeTask, setActiveTask] = useState<Task>(() => createRandomTask(1));
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
@@ -194,8 +197,11 @@ export function ReportClient() {
   const [adminAssignReceiptDone, setAdminAssignReceiptDone] = useState(false);
   const [lastAssignmentGrantAt, setLastAssignmentGrantAt] = useState<string | null>(null);
   const [waitingForAdminReassign, setWaitingForAdminReassign] = useState(false);
-  const [failedMessage, setFailedMessage] = useState("You have unfinished orders, please deal with them in time");
+  const [failedMessage, setFailedMessage] = useState("check your activity track");
   const [toastMessage, setToastMessage] = useState("");
+  const [isPrimeCongratsOpen, setIsPrimeCongratsOpen] = useState(false);
+  const [primeReward, setPrimeReward] = useState<{ image: string; title: string } | null>(null);
+  const [lastPrimeNoticeId, setLastPrimeNoticeId] = useState<string | null>(null);
 
   const total = TOTAL_TASKS;
   const safeIndex = ((currentTaskIndex % total) + total) % total;
@@ -204,6 +210,25 @@ export function ReportClient() {
     () => `Task ${safeIndex + 1} / ${total}`,
     [safeIndex, total],
   );
+  const campaignWallet = useMemo(
+    // Campaign wallet should reflect only actual usable/task balance.
+    () => totalCapital,
+    [totalCapital],
+  );
+  const pendingPrimeEntry = useMemo(
+    () => activityEntries.find((entry) => entry.status === "pending" && Boolean(entry.isPrime)) || null,
+    [activityEntries],
+  );
+  const hasPrimeOrderLock = Boolean(pendingPrimeEntry);
+  const primeNegativeAmount = Math.max(0, Number(taskStatus?.primeNegativeAmount ?? 0) || 0);
+  const shouldShowPrimeNegative = hasPrimeOrderLock && primeNegativeAmount > 0;
+  const displayedTotalCapital = shouldShowPrimeNegative ? -Math.abs(primeNegativeAmount) : totalCapital;
+  const displayedProtectedReserve = shouldShowPrimeNegative ? 0 : protectedReserve;
+  const displayedCampaignWallet = useMemo(() => {
+    if (!shouldShowPrimeNegative) return campaignWallet;
+    // For prime-negative mode: reserve is moved to 0, keep upper usable amount in campaign wallet.
+    return totalCapital;
+  }, [shouldShowPrimeNegative, campaignWallet, totalCapital]);
   const currentTitle = getTitleFromImageName(activeTask.image);
   const isAdminAssignedCyclePending =
     Boolean(taskStatus?.taskAssignmentGrantedAt) &&
@@ -289,6 +314,15 @@ export function ReportClient() {
     void loadTaskActivity();
   }, []);
 
+  useEffect(() => {
+    if (!pendingPrimeEntry?.id) return;
+    if (pendingPrimeEntry.id === lastPrimeNoticeId) return;
+    setLastPrimeNoticeId(pendingPrimeEntry.id);
+    const img = getNextTaskImage();
+    setPrimeReward({ image: img, title: getTitleFromImageName(img) });
+    setIsPrimeCongratsOpen(true);
+  }, [pendingPrimeEntry?.id, lastPrimeNoticeId]);
+
   const openTaskModal = () => {
     if (isAdminAssignedCyclePending) {
       setFailedMessage("check your acitivty track");
@@ -299,23 +333,23 @@ export function ReportClient() {
       if (res.error && res.data?.code === "PRIME_ORDER_PENDING") {
         void loadTaskActivity().then((entries) => {
           if (hasPendingPrimeOrder(entries)) {
-            setFailedMessage("check your acitivty task you get prime order");
             setToastMessage("Insufficient balance, please recharge and try again");
             window.setTimeout(() => setToastMessage(""), 2200);
           } else {
-            setFailedMessage("You have unfinished orders, please deal with them in time");
+            setFailedMessage("check your activity track");
+            setIsFailedModalOpen(true);
           }
-          setIsFailedModalOpen(true);
         });
         return;
       }
       if (res.error || !res.data || !res.data.task) {
-        setFailedMessage("You have unfinished orders, please deal with them in time");
+        const code = (res.data as { code?: string } | undefined)?.code;
+        setFailedMessage(code === "TASK_ASSIGNMENT_REQUIRED" ? "check your activity track" : "You have unfinished orders, please deal with them in time");
         setIsFailedModalOpen(true);
         return;
       }
       if (waitingForAdminReassign || !res.data.status?.canPerformTasks) {
-        setFailedMessage("You have unfinished orders, please deal with them in time");
+        setFailedMessage("check your activity track");
         setIsFailedModalOpen(true);
         return;
       }
@@ -336,7 +370,7 @@ export function ReportClient() {
       setIsTaskModalOpen(true);
       void loadTaskActivity();
     }).catch(() => {
-      setFailedMessage("You have unfinished orders, please deal with them in time");
+      setFailedMessage("check your activity track");
       setIsFailedModalOpen(true);
     });
   };
@@ -358,11 +392,11 @@ export function ReportClient() {
               setToastMessage("Insufficient balance, please recharge and try again");
               window.setTimeout(() => setToastMessage(""), 2200);
             } else {
-              setFailedMessage("You have unfinished orders, please deal with them in time");
+              setFailedMessage("check your activity track");
             }
           });
         } else {
-          setFailedMessage("You have unfinished orders, please deal with them in time");
+          setFailedMessage("check your activity track");
         }
         setIsSuccessModalOpen(false);
         setIsFailedModalOpen(true);
@@ -445,32 +479,36 @@ export function ReportClient() {
 
   const filteredActivityEntries = useMemo(() => {
     const pendingEntries = activityEntries.filter((e) => e.status === "pending");
+    const completedEntries = activityEntries.filter((e) => e.status === "completed");
     const pendingPrimeEntry = pendingEntries.find((e) => Boolean(e.isPrime)) || null;
-    // Keep completed history compact: 1 notification per fully completed 29-task cycle.
+    // Keep completed history compact: 1 notification per fully completed 30-task cycle.
     const completedSummaryNotifications = buildCompletedNotifications(activityEntries, total);
     const primeOrderNotifications: ActivityEntry[] = pendingPrimeEntry
       ? [
           {
             id: `prime-order-notice-${pendingPrimeEntry.id}`,
-            title: "Prime Order Assigned (Action Required)",
+            title: "Prime Order Assigned (Action Required • 5x Commission)",
             orderNumber: `Remaining tasks: ${Math.max(0, Number(taskStatus?.remaining ?? 0))}`,
             quantityRs: pendingPrimeEntry.quantityRs,
             commissionRs: pendingPrimeEntry.commissionRs,
             createdAt: pendingPrimeEntry.createdAt,
-            status: "completed",
+            status: "pending",
             isPrime: true,
           },
         ]
       : [];
-    const canShowDisposeEntries =
-      isAdminAssignedCyclePending;
-    const visiblePendingEntries = canShowDisposeEntries
-      ? pendingEntries
-      : [];
-    const allEntries = [...visiblePendingEntries, ...primeOrderNotifications, ...completedSummaryNotifications];
+    // Always show current pending task notifications in Activity Track.
+    const visiblePendingEntries = pendingEntries;
+    const allEntries = [
+      ...visiblePendingEntries,
+      ...primeOrderNotifications,
+      ...completedSummaryNotifications,
+      ...completedEntries,
+    ];
     if (activityTab === "all") return allEntries;
-    if (activityTab === "pending") return visiblePendingEntries;
-    return completedSummaryNotifications;
+    if (activityTab === "pending") return [...visiblePendingEntries, ...primeOrderNotifications];
+    // Completed tab should show both the per-task completed history and the 30-task cycle summaries.
+    return [...completedSummaryNotifications, ...completedEntries];
   }, [activityEntries, activityTab, taskStatus, isAdminAssignedCyclePending, total]);
 
   const handlePendingDispose = (entry: ActivityEntry) => {
@@ -481,7 +519,7 @@ export function ReportClient() {
     }
     userApi.completeTask(entry.id).then((res) => {
       if (res.error) {
-        setFailedMessage("You have unfinished orders, please deal with them in time");
+        setFailedMessage("check your activity track");
         setIsFailedModalOpen(true);
         return;
       }
@@ -515,8 +553,8 @@ export function ReportClient() {
       <div className="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-4 space-y-4">
         <div className="flex flex-col items-center gap-1">
           <span className="text-xs text-slate-500">Total Capital</span>
-          <span className="text-xl font-semibold text-slate-900">
-            {formatAssetBalance(totalCapital)}
+          <span className={`text-xl font-semibold ${shouldShowPrimeNegative ? "text-red-600" : "text-slate-900"}`}>
+            {formatAssetBalance(displayedTotalCapital)}
           </span>
         </div>
 
@@ -528,7 +566,7 @@ export function ReportClient() {
               </span>
               Instant Profit
             </p>
-            <p className="text-sm font-semibold">{currencyRs(instantProfit)}</p>
+            <p className="text-sm font-semibold text-slate-900">{currencyRs(instantProfit)}</p>
           </div>
           <div className="space-y-1">
             <p className="flex items-center gap-1.5 font-medium">
@@ -546,7 +584,7 @@ export function ReportClient() {
               </span>
               Protected Reserve
             </p>
-            <p className="text-sm font-semibold">Rs0.00</p>
+            <p className="text-sm font-semibold">{currencyRs(displayedProtectedReserve)}</p>
           </div>
           <div className="space-y-1">
             <p className="flex items-center gap-1.5 font-medium">
@@ -555,7 +593,7 @@ export function ReportClient() {
               </span>
               Campaign Wallet
             </p>
-            <p className="text-sm font-semibold">Rs0</p>
+            <p className="text-sm font-semibold">{currencyRs(displayedCampaignWallet)}</p>
           </div>
         </div>
       </div>
@@ -846,7 +884,7 @@ export function ReportClient() {
               >
                 <div className="space-y-3">
                   <p className="text-right text-sm font-semibold text-slate-800">
-                    {e.isPrime ? "Prime Order" : "Brand Vault"}
+                    {e.isPrime ? "Prime Order • x5 commission" : "Brand Vault"}
                   </p>
                   <div className="h-px w-full bg-slate-200" />
                 </div>
@@ -867,6 +905,7 @@ export function ReportClient() {
                   <p>
                     <span className="font-medium">Commission</span>:{" "}
                     {currencyRs(e.commissionRs)}
+                    {e.isPrime ? " (x5)" : ""}
                   </p>
                   <p>
                     <span className="font-medium">Time</span>:{" "}
@@ -883,9 +922,11 @@ export function ReportClient() {
                     <button
                       type="button"
                       onClick={() => handlePendingDispose(e)}
-                      className="inline-flex items-center justify-center rounded-full bg-sky-600 px-12 py-2.5 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                      className={`inline-flex items-center justify-center rounded-full px-12 py-2.5 text-xs font-semibold text-white shadow ${
+                        e.isPrime ? "bg-red-600 hover:bg-red-700" : "bg-sky-600 hover:bg-sky-700"
+                      }`}
                     >
-                      Dispose
+                      {e.isPrime ? "Continue" : "Dispose"}
                     </button>
                   )}
                 </div>
@@ -934,6 +975,78 @@ export function ReportClient() {
           >
             Confirm
           </button>
+        </div>
+      </ModalShell>
+
+      <ModalShell open={isPrimeCongratsOpen} onClose={() => setIsPrimeCongratsOpen(false)}>
+        <div className="relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-b from-amber-50 to-white" />
+          <div
+            className="absolute inset-0 opacity-40"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 10% 10%, rgba(245,158,11,.25) 0 10px, transparent 11px), radial-gradient(circle at 70% 20%, rgba(16,185,129,.25) 0 8px, transparent 9px), radial-gradient(circle at 30% 70%, rgba(168,85,247,.25) 0 9px, transparent 10px)",
+            }}
+          />
+
+          <div className="relative px-4 pt-3 pb-4 border-b border-slate-200 flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-900 mx-auto">Grab Order</h2>
+            <button
+              type="button"
+              onClick={() => setIsPrimeCongratsOpen(false)}
+              className="absolute right-4 h-8 w-8 rounded-full hover:bg-slate-100 grid place-items-center text-slate-500"
+              aria-label="Close prime notice"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="relative p-6 text-center space-y-4">
+            <div className="mx-auto h-16 w-16 rounded-full bg-emerald-500 grid place-items-center shadow">
+              <svg viewBox="0 0 24 24" className="h-9 w-9 text-white" fill="none" stroke="currentColor" strokeWidth="3">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-xl font-semibold text-slate-900">Congratulations!!</p>
+              <p className="text-xs text-slate-600">
+                You have received an exclusive booking.
+              </p>
+            </div>
+
+            {primeReward ? (
+              <div className="mx-auto w-full max-w-xs rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="relative h-14 w-20 rounded-md overflow-hidden border border-slate-200 bg-slate-50">
+                    <Image
+                      src={primeReward.image}
+                      alt={primeReward.title}
+                      fill
+                      sizes="80px"
+                      className="object-cover"
+                    />
+                  </div>
+                  <div className="min-w-0 text-left">
+                    <div className="text-xs font-semibold text-slate-900 truncate">
+                      {primeReward.title}
+                    </div>
+                    <div className="text-[11px] text-slate-600">
+                      Prime order assigned by admin
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => setIsPrimeCongratsOpen(false)}
+              className="w-full rounded-md bg-sky-600 py-3 text-sm font-semibold text-white shadow hover:bg-sky-700"
+            >
+              Book Now
+            </button>
+          </div>
         </div>
       </ModalShell>
       {toastMessage ? (

@@ -19,13 +19,13 @@ function formatDate(iso: string) {
 export default function AdminApprovalsPage() {
   const canApprove = isSuperAdmin() || canAdmin("approve");
   const permissionLabel = isSuperAdmin() ? "super_admin" : getAdminPermission();
-  const [users, setUsers] = useState<Array<{ id: number; full_name: string; email: string; phone: string; status: string; created_at: string; updated_at?: string }>>([]);
+  const [users, setUsers] = useState<Array<{ id: string; full_name: string; email: string; phone: string; status: string; created_at: string; updated_at?: string }>>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [actionId, setActionId] = useState<number | null>(null);
+  const [actionId, setActionId] = useState<string | null>(null);
 
   const load = useCallback(async (pageNum = 1) => {
     setLoading(true);
@@ -53,7 +53,7 @@ export default function AdminApprovalsPage() {
     load(page);
   };
 
-  const handleApprove = async (id: number) => {
+  const handleApprove = async (id: string) => {
     if (!canApprove) return;
     setActionId(id);
     const result = await adminApi.approve(id);
@@ -65,7 +65,7 @@ export default function AdminApprovalsPage() {
     await load(page);
   };
 
-  const handleReject = async (id: number) => {
+  const handleReject = async (id: string) => {
     if (!canApprove) return;
     if (typeof window !== "undefined" && !window.confirm("Reject this user's registration?")) return;
     setActionId(id);

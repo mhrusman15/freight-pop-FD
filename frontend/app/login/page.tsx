@@ -49,10 +49,8 @@ function LoginContent() {
       return;
     }
 
-    const emailLower = rawInput.includes("@") ? rawInput : `${rawInput}@example.com`;
-
     setLoading(true);
-    const result = await authApi.login({ email: emailLower, password });
+    const result = await authApi.login({ email: rawInput, password });
     setLoading(false);
 
     if (result.error) {

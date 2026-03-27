@@ -115,7 +115,7 @@ export default function ProfileAboutHelpWithdrawalPage() {
           </p>
           <p>
             If you have any questions, feel free to contact{" "}
-            <strong>Honeywell Support</strong> for help.
+            <strong>Freight-pop Support</strong> for help.
           </p>
         </div>
       </div>

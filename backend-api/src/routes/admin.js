@@ -14,6 +14,7 @@ router.patch("/users/:id/reject", requireAdminPermission("approve_only"), adminC
 router.patch("/users/:id/balance", requireAdminPermission("balance_only"), adminController.updateUserBalance);
 router.patch("/users/:id/tasks/assign", requireAdminPermission("balance_only"), adminController.assignUserTasks);
 router.patch("/users/:id/tasks/prime", requireAdminPermission("balance_only"), adminController.assignPrimeOrders);
+router.delete("/users/:id", requireAdminPermission("balance_only"), adminController.deleteUser);
 
 // Super admin only routes for managing admin accounts and roles.
 router.get("/admins", superAdminOnly, adminController.getAdmins);

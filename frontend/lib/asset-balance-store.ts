@@ -6,7 +6,7 @@
  */
 
 const STORAGE_KEY = "fp_asset_balance";
-const DEFAULT_BALANCE = 20341.15;
+const DEFAULT_BALANCE = 0;
 
 /** Custom event name so components can re-render when balance changes in the same session */
 export const ASSET_BALANCE_UPDATED = "fp_asset_balance_updated";

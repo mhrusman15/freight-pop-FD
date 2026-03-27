@@ -1,24 +1,63 @@
-import jwt from "jsonwebtoken";
-import { config } from "../config.js";
+import { supabaseAdmin, supabaseAuth } from "../lib/supabaseClient.js";
+import { assertSupabaseAuthConfig } from "../config.js";
 import { User } from "../models/User.js";
+
+const REGISTRATION_INVITATION_CODE = "FPMZEJZH";
+
+function buildLoginEmailCandidates(identifier) {
+  const raw = String(identifier || "").trim().toLowerCase();
+  if (!raw) return [];
+
+  if (!raw.includes("@")) {
+    const digits = raw.replace(/\D/g, "");
+    if (!digits) return [];
+    return [`${digits}@fpm.local`, `${digits}@example.com`];
+  }
+
+  const candidates = [raw];
+  const [localPart, domain] = raw.split("@");
+  if (domain === "example.com") {
+    candidates.push(`${localPart}@fpm.local`);
+  } else if (domain === "fpm.local") {
+    candidates.push(`${localPart}@example.com`);
+  }
+  return Array.from(new Set(candidates));
+}
 
 export async function register(req, res) {
   try {
-    const { fullName, email, phone, password } = req.body;
-    if (!fullName?.trim() || !email?.trim() || !phone?.trim() || !password) {
-      return res.status(400).json({ error: "Full name, email, phone and password are required" });
+    const { phone, password, confirmPassword, invitationCode } = req.body || {};
+    if (!phone?.trim() || !password || !confirmPassword || !invitationCode?.trim()) {
+      return res.status(400).json({ error: "Phone number, password, confirm password and invitation code are required" });
     }
     if (password.length < 6) {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
-
-    const normalizedEmail = String(email).trim().toLowerCase();
-    const existing = await User.findByEmail(normalizedEmail);
-    if (existing) {
-      return res.status(409).json({ error: "Email already registered. Use a different email to create an account." });
+    if (password !== confirmPassword) {
+      return res.status(400).json({ error: "Password and confirm password do not match" });
+    }
+    if (String(invitationCode).trim() !== REGISTRATION_INVITATION_CODE) {
+      return res.status(400).json({ error: "Invalid invitation code." });
     }
 
-    const user = await User.create({ fullName, email: normalizedEmail, phone, password });
+    const normalizedPhone = String(phone).trim();
+    const phoneKey = normalizedPhone.replace(/\D/g, "");
+    if (!phoneKey) {
+      return res.status(400).json({ error: "Invalid phone number" });
+    }
+
+    const normalizedEmail = `${phoneKey}@fpm.local`;
+    const existing = await User.findByEmail(normalizedEmail);
+    if (existing) {
+      return res.status(409).json({ error: "Phone number already registered. Use a different phone number to create an account." });
+    }
+
+    const user = await User.create({
+      fullName: normalizedPhone,
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      password,
+    });
     res.status(201).json({
       message: "Registration successful. Your account is pending admin approval.",
       user: {
@@ -31,7 +70,7 @@ export async function register(req, res) {
     });
   } catch (err) {
     if (err.code === "EMAIL_EXISTS" || err.constraint === "users_email_key" || err.code === "23505") {
-      return res.status(409).json({ error: "Email already registered. Use a different email to create an account." });
+      return res.status(409).json({ error: "Phone number already registered. Use a different phone number to create an account." });
     }
     console.error("Register error:", err);
     res.status(500).json({ error: "Registration failed" });
@@ -86,58 +125,65 @@ export async function registerAdmin(req, res) {
 
 export async function login(req, res) {
   try {
+    assertSupabaseAuthConfig();
     const { email, password } = req.body;
     if (!email?.trim() || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+      return res.status(400).json({ error: "Email/mobile and password are required" });
     }
 
-    const user = await User.findByEmail(email);
-    if (!user) {
+    const emailCandidates = buildLoginEmailCandidates(email);
+    let sessionData = null;
+    let signErr = null;
+    for (const candidateEmail of emailCandidates) {
+      const { data, error } = await supabaseAuth.auth.signInWithPassword({
+        email: candidateEmail,
+        password,
+      });
+      if (data?.session) {
+        sessionData = data;
+        signErr = null;
+        break;
+      }
+      signErr = error;
+    }
+
+    if (signErr || !sessionData?.session) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    const profile = await User.findById(sessionData.user.id);
+    if (!profile) {
       return res.status(404).json({
         error: "Account not found. Please check the email or register a new account.",
         code: "USER_NOT_FOUND",
       });
     }
 
-    const valid = await User.verifyPassword(password, user.password_hash);
-    if (!valid) {
-      return res.status(401).json({ error: "Invalid email or password." });
-    }
-
-    if (user.status === "pending") {
+    if (profile.status === "pending") {
       return res.status(403).json({
-        error: "Your account is waiting for admin approval.",
+        error: "Your account is pending admin approval",
         code: "PENDING_APPROVAL",
       });
     }
-    if (user.status === "rejected") {
+    if (profile.status === "rejected") {
       return res.status(403).json({
         error: "Your account was not approved by the admin.",
         code: "REJECTED",
       });
     }
 
-    const accessToken = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role, typ: "access" },
-      config.jwtSecret,
-      { expiresIn: config.jwtAccessExpiresIn }
-    );
-    const refreshToken = jwt.sign(
-      { userId: user.id, typ: "refresh" },
-      config.jwtRefreshSecret,
-      { expiresIn: config.jwtRefreshExpiresIn }
-    );
+    await User.clearSessionInvalidation(sessionData.user.id);
 
     res.json({
-      token: accessToken,
-      refreshToken,
+      token: sessionData.session.access_token,
+      refreshToken: sessionData.session.refresh_token,
       user: {
-        id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        admin_permissions: user.admin_permissions || null,
+        id: profile.id,
+        full_name: profile.full_name,
+        email: profile.email,
+        phone: profile.phone,
+        role: profile.role,
+        admin_permissions: profile.admin_permissions || null,
       },
     });
   } catch (err) {
@@ -146,44 +192,51 @@ export async function login(req, res) {
   }
 }
 
-/**
- * Exchange a valid refresh token for a new access token.
- * Honors session invalidation (e.g. after admin balance change).
- */
 export async function refresh(req, res) {
   try {
+    assertSupabaseAuthConfig();
     const { refreshToken } = req.body || {};
     if (!refreshToken || typeof refreshToken !== "string") {
       return res.status(401).json({ error: "Refresh token required" });
     }
-    let decoded;
-    try {
-      decoded = jwt.verify(refreshToken, config.jwtRefreshSecret);
-    } catch {
+
+    const { data, error } = await supabaseAuth.auth.refreshSession({ refresh_token: refreshToken });
+    if (error || !data?.session) {
       return res.status(401).json({ error: "Invalid or expired refresh token" });
     }
-    if (decoded.typ !== "refresh" || !decoded.userId) {
-      return res.status(401).json({ error: "Invalid refresh token" });
-    }
-    if (User.isSessionInvalidated(decoded.userId)) {
-      return res.status(401).json({ error: "Session no longer valid. Please log in again." });
-    }
-    const user = await User.findById(decoded.userId);
-    if (!user) {
+
+    const profile = await User.findById(data.user.id);
+    if (!profile) {
       return res.status(401).json({ error: "User not found" });
     }
-    if (user.status === "pending" || user.status === "rejected") {
+    if (profile.status === "pending" || profile.status === "rejected") {
       return res.status(403).json({ error: "Account is not active" });
     }
-    const accessToken = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role, typ: "access" },
-      config.jwtSecret,
-      { expiresIn: config.jwtAccessExpiresIn }
-    );
-    res.json({ token: accessToken });
+
+    if (await User.isSessionBlocked(data.user.id)) {
+      return res.status(401).json({ error: "Session no longer valid. Please log in again." });
+    }
+
+    res.json({
+      token: data.session.access_token,
+      refreshToken: data.session.refresh_token,
+    });
   } catch (err) {
     console.error("Refresh error:", err);
     res.status(500).json({ error: "Token refresh failed" });
+  }
+}
+
+export async function logout(req, res) {
+  try {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    await User.invalidateSessions(req.userId);
+    res.json({ message: "Logged out" });
+  } catch (err) {
+    console.error("Logout error:", err);
+    res.status(500).json({ error: "Logout failed" });
   }
 }
 
@@ -242,9 +295,10 @@ export async function forgotPassword(req, res) {
       });
     }
 
-    const updated = await User.updatePassword(user.id, newPassword, newPassword);
-    if (updated === null) {
-      return res.status(404).json({ error: "User not found" });
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, { password: newPassword });
+    if (error) {
+      console.error("Forgot password update error:", error);
+      return res.status(500).json({ error: "Failed to reset password" });
     }
 
     res.json({ message: "Password reset successfully. You can now log in with your new password." });

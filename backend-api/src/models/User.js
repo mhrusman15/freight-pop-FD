@@ -1,546 +1,536 @@
-import { config } from "../config.js";
-import { pool } from "../db/pool.js";
-import { memoryStore } from "../store/memory-store.js";
-import bcrypt from "bcryptjs";
+import { supabaseAdmin, supabaseAuth } from "../lib/supabaseClient.js";
+import {
+  TASK_DAILY_LIMIT,
+  TASK_IMAGE_POOL,
+  buildEmailCandidates,
+  buildImageCycles,
+  generateOrderNumber,
+  makeUserTaskFromState,
+  nowIso,
+} from "../lib/taskGeneration.js";
 
-const store = config.useMemoryStore ? memoryStore : null;
-const TASK_DAILY_LIMIT = 29;
-const AUTO_ASSIGN_HOURS = 24;
+function accountStatusFromRow(row) {
+  if (!row) return null;
+  if (row.rejected) return "rejected";
+  if (row.is_approved) return "approved";
+  return "pending";
+}
 
-// In-memory list of users whose sessions should be treated as invalid.
-// Used to force logout after sensitive admin actions (e.g. balance change).
-const invalidatedUserIds = new Set();
-const primeOrderSlotsByUser = new Map(); // userId -> Set(1..TASK_DAILY_LIMIT)
-const taskActivitiesByUser = new Map(); // userId -> [{...}]
-const pendingActivityByUser = new Map(); // userId -> activityId
-
-const TASK_CATALOG = [
-  { title: "Luxury Order", image: "/assets/tasks/Girl-bag.jpg", min: 55000, max: 65000, commissionMin: 1800, commissionMax: 2600 },
-  { title: "Brand Vault", image: "/assets/tasks/Man-Watch.jpg", min: 42000, max: 58000, commissionMin: 1200, commissionMax: 1900 },
-  { title: "Elite Choice", image: "/assets/tasks/Man-Shoes.jpg", min: 20000, max: 35000, commissionMin: 700, commissionMax: 1200 },
-];
-const TASK_IMAGE_POOL = [
-  "/assets/tasks/Man-Shoes.jpg",
-  "/assets/tasks/Woman-shoes.jpg",
-  "/assets/tasks/heals.jpg",
-  "/assets/tasks/Shoes-men.jpg",
-  "/assets/tasks/Men-Jacket.jpg",
-  "/assets/tasks/Man-Watch.jpg",
-  "/assets/tasks/Woman-watch.jpg",
-  "/assets/tasks/Health-watch.jpg",
-  "/assets/tasks/Smart Watch.jpg",
-  "/assets/tasks/Clock.jpg",
-  "/assets/tasks/Sony-headphone.jpg",
-  "/assets/tasks/Girl-bag.jpg",
-  "/assets/tasks/laptop-bag.jpg",
-  "/assets/tasks/Girl-Stoler.jpg",
-  "/assets/tasks/Laptop.jpg",
-  "/assets/tasks/ipad.jpg",
-  "/assets/tasks/USB-128Gb.jpg",
-  "/assets/tasks/speaker.jpg",
-  "/assets/tasks/glasses.jpg",
-  "/assets/tasks/Bike-Helmet.jpg",
-  "/assets/tasks/Canon-Camera.jpg",
-  "/assets/tasks/Makeup-kit.jpg",
-  "/assets/tasks/Toy.jpg",
-  "/assets/tasks/Toy-gun.jpg",
-  "/assets/tasks/Tree-light.jpg",
-  "/assets/tasks/purfume.jpg",
-  "/assets/tasks/charger.jpg",
-  "/assets/tasks/earring.jpg",
-  "/assets/tasks/study-table.jpg",
-  "/assets/tasks/toolbox.jpg",
-  "/assets/tasks/voltmeter.jpg",
-  "/assets/tasks/water-bottle.jpg",
-];
-const imageCyclesByUser = new Map(); // userId -> { index, sequence }
-
-function randomInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-function nowIso() {
-  return new Date().toISOString();
-}
-function imagePathToTitle(imagePath) {
-  const file = String(imagePath || "").split("/").pop() || "task";
-  return file.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
-}
-function shuffle(arr) {
-  const next = [...arr];
-  for (let i = next.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [next[i], next[j]] = [next[j], next[i]];
-  }
-  return next;
-}
-function pickItemsWithReplacement(source, count) {
-  const out = [];
-  if (!source.length || count <= 0) return out;
-  for (let i = 0; i < count; i += 1) {
-    out.push(source[randomInt(0, source.length - 1)]);
-  }
-  return out;
-}
-function buildImageCycles() {
-  const base = shuffle(TASK_IMAGE_POOL);
-  // Cycle through the full image pool first so users see broad variety
-  // (well over 15-16 unique images) before any repeat.
-  const sequence = base.length
-    ? base
-    : pickItemsWithReplacement(TASK_IMAGE_POOL, TASK_DAILY_LIMIT);
-  return { index: 0, sequence };
-}
-function nextTaskImageForUser(userId) {
-  const idNum = Number(userId);
-  const state = imageCyclesByUser.get(idNum) || buildImageCycles();
-  const image = state.sequence[state.index] || TASK_IMAGE_POOL[0];
-  state.index += 1;
-  // Reset only after consuming the full prepared sequence.
-  if (state.index >= state.sequence.length) {
-    const refreshed = buildImageCycles();
-    state.index = refreshed.index;
-    state.sequence = refreshed.sequence;
-  }
-  imageCyclesByUser.set(idNum, state);
-  return image;
-}
-function buildEmailCandidates(emailRaw) {
-  const base = String(emailRaw || "").trim().toLowerCase();
-  if (!base) return [];
-  const set = new Set([base]);
-  // Backward-compatible admin alias support.
-  if (base === "admin@gamil.com") set.add("admin@gmail.com");
-  if (base === "admin@gmail.com") set.add("admin@gamil.com");
-  return [...set];
-}
-function generateOrderNumber(now = new Date()) {
-  const pad2 = (n) => String(n).padStart(2, "0");
-  const ymdhms =
-    String(now.getFullYear()) +
-    pad2(now.getMonth() + 1) +
-    pad2(now.getDate()) +
-    pad2(now.getHours()) +
-    pad2(now.getMinutes()) +
-    pad2(now.getSeconds());
-  return `02${randomInt(1000, 9999)}${ymdhms}${randomInt(10, 99)}`;
-}
-function makeActivityTask(taskNo, isPrime) {
-  const template = isPrime ? TASK_CATALOG[0] : TASK_CATALOG[randomInt(1, TASK_CATALOG.length - 1)];
-  const quantity = randomInt(template.min, template.max);
-  const commission = randomInt(template.commissionMin * 100, template.commissionMax * 100) / 100;
+function mapProfile(row) {
+  if (!row) return null;
   return {
-    taskNo,
-    title: template.title,
-    image: template.image,
-    quantityRs: Number(quantity.toFixed ? quantity.toFixed(2) : quantity),
-    commissionRs: Number(commission.toFixed(2)),
-    rewards: 1,
-    isPrime,
+    id: row.id,
+    full_name: row.full_name,
+    email: row.email,
+    phone: row.phone,
+    status: accountStatusFromRow(row),
+    role: row.role,
+    admin_permissions: row.admin_permissions || null,
+    asset_balance: row.balance != null ? Number(row.balance) : 0,
+    created_at: row.created_at,
   };
 }
-function makeUserTask(userId, taskNo, isPrime) {
-  const task = makeActivityTask(taskNo, isPrime);
-  if (!isPrime) {
-    task.image = nextTaskImageForUser(userId);
-    task.title = imagePathToTitle(task.image);
+
+function parseImageState(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object" && raw.sequence && Array.isArray(raw.sequence)) {
+    return { index: raw.index ?? 0, sequence: raw.sequence };
   }
-  return task;
+  return null;
 }
-function buildPendingActivity(userId, taskNo, isPrime) {
-  const task = makeUserTask(userId, taskNo, isPrime);
-  const createdAt = nowIso();
-  return {
-    id: `act-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-    title: task.title,
-    orderNumber: generateOrderNumber(new Date(createdAt)),
-    quantityRs: task.quantityRs,
-    commissionRs: task.commissionRs,
-    createdAt,
-    status: "pending",
-    taskNo,
-    isPrime,
-    task,
-  };
+
+async function loadUserRow(userId) {
+  const { data, error } = await supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function insertTransaction(userId, type, amount, status = "approved") {
+  const { error } = await supabaseAdmin.from("transactions").insert({
+    user_id: userId,
+    type,
+    amount,
+    status,
+  });
+  if (error) throw error;
+}
+
+async function insertActivityLog(userId, message) {
+  const { error } = await supabaseAdmin.from("activity_logs").insert({
+    user_id: userId,
+    message,
+  });
+  if (error) throw error;
+}
+
+async function hasBonusLog(userId) {
+  const { count, error } = await supabaseAdmin
+    .from("activity_logs")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("message", "You received 30 tasks (first-time bonus)");
+  if (error) throw error;
+  return (count || 0) > 0;
 }
 
 export const User = {
   async create({ fullName, email, phone, password }) {
-    if (store) return store.create({ fullName, email, phone, password });
-    const passwordHash = await bcrypt.hash(password, 10);
-    const { rows } = await pool.query(
-      `INSERT INTO users (full_name, email, phone, password_hash, status, role, task_quota_total, task_quota_used)
-       VALUES ($1, $2, $3, $4, 'pending', 'user', $5, 0)
-       RETURNING id, full_name, email, phone, status, role, created_at`,
-      [fullName, email.trim().toLowerCase(), phone, passwordHash, TASK_DAILY_LIMIT]
-    );
-    return rows[0];
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+      email: normalizedEmail,
+      password,
+      email_confirm: true,
+    });
+    if (authErr) {
+      const err = new Error(authErr.message);
+      err.code = authErr.code;
+      throw err;
+    }
+    const id = authData.user.id;
+    const { data: row, error: insErr } = await supabaseAdmin
+      .from("users")
+      .insert({
+        id,
+        email: normalizedEmail,
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+        role: "user",
+        is_approved: false,
+        has_received_first_tasks: false,
+        first_tasks_completed: 0,
+        rejected: false,
+        balance: 0,
+        task_quota_total: TASK_DAILY_LIMIT,
+        task_quota_used: 0,
+        task_assignment_required: true,
+        task_assignment_granted_at: null,
+      })
+      .select("id, full_name, email, phone, is_approved, rejected, created_at")
+      .single();
+    if (insErr) {
+      await supabaseAdmin.auth.admin.deleteUser(id);
+      const err = new Error(insErr.message);
+      err.code = insErr.code;
+      if (insErr.code === "23505") err.code = "23505";
+      throw err;
+    }
+    return {
+      id: row.id,
+      full_name: row.full_name,
+      email: row.email,
+      phone: row.phone,
+      status: accountStatusFromRow(row),
+    };
   },
 
   async findByEmail(email) {
-    if (store) return store.findByEmail(email);
     const candidates = buildEmailCandidates(email);
     if (!candidates.length) return null;
-    const { rows } = await pool.query(
-      `SELECT id, full_name, email, phone, password_hash, status, role, admin_permissions, created_at, asset_balance
-       FROM users
-       WHERE LOWER(TRIM(email)) = ANY($1::text[])
-       LIMIT 1`,
-      [candidates]
-    );
-    return rows[0] || null;
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .select("*")
+      .in("email", candidates)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return mapProfile(data);
   },
 
   async findById(id) {
-    if (store) return store.findById(id);
-    const { rows } = await pool.query(
-      `SELECT id, full_name, email, phone, status, role, admin_permissions, created_at, asset_balance
-       FROM users WHERE id = $1`,
-      [id]
-    );
-    return rows[0] || null;
+    const { data, error } = await supabaseAdmin.from("users").select("*").eq("id", id).maybeSingle();
+    if (error) throw error;
+    return mapProfile(data);
   },
 
   async getBalance(userId) {
-    if (store) return store.getBalance(userId);
-    const { rows } = await pool.query(
-      `SELECT COALESCE(asset_balance, 0)::float AS balance FROM users WHERE id = $1`,
-      [userId]
-    );
-    return rows[0] ? Number(rows[0].balance) : null;
+    const row = await loadUserRow(userId);
+    return row ? Number(row.balance ?? 0) : null;
   },
 
   async setBalance(userId, value) {
-    if (store) return store.setBalance(userId, value);
     const num = Number(value);
     if (!Number.isFinite(num) || num < 0) throw new Error("Invalid amount");
-    const { rows } = await pool.query(
-      `UPDATE users
-       SET asset_balance = $1, updated_at = NOW()
-       WHERE id = $2
-       RETURNING asset_balance::float AS new_balance`,
-      [num, userId]
-    );
-    return rows[0] ? Number(rows[0].new_balance) : null;
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update({ balance: num })
+      .eq("id", userId)
+      .select("balance")
+      .maybeSingle();
+    if (error) throw error;
+    return data ? Number(data.balance) : null;
   },
 
-  async addToBalance(userId, amount) {
-    if (store) return store.addToBalance(userId, amount);
+  async addToBalance(userId, amount, { recordDeposit = false } = {}) {
     const num = Number(amount);
     if (!Number.isFinite(num) || num < 0) throw new Error("Invalid amount");
-    const { rows } = await pool.query(
-      `UPDATE users SET asset_balance = COALESCE(asset_balance, 0) + $1, updated_at = NOW()
-       WHERE id = $2 RETURNING asset_balance::float AS new_balance`,
-      [num, userId]
-    );
-    return rows[0] ? Number(rows[0].new_balance) : null;
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    const next = Number(row.balance ?? 0) + num;
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update({ balance: next })
+      .eq("id", userId)
+      .select("balance")
+      .maybeSingle();
+    if (error) throw error;
+    if (recordDeposit && data) {
+      await insertTransaction(userId, "deposit", num, "approved");
+    }
+    return data ? Number(data.balance) : null;
   },
 
   async subtractFromBalance(userId, amount) {
-    if (store) return store.subtractFromBalance(userId, amount);
     const num = Number(amount);
     if (!Number.isFinite(num) || num < 0) throw new Error("Invalid amount");
-    const { rows } = await pool.query(
-      `UPDATE users SET asset_balance = GREATEST(0, COALESCE(asset_balance, 0) - $1), updated_at = NOW()
-       WHERE id = $2 RETURNING asset_balance::float AS new_balance`,
-      [num, userId]
-    );
-    return rows[0] ? Number(rows[0].new_balance) : null;
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    const next = Math.max(0, Number(row.balance ?? 0) - num);
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update({ balance: next })
+      .eq("id", userId)
+      .select("balance")
+      .maybeSingle();
+    if (error) throw error;
+    return data ? Number(data.balance) : null;
   },
 
   async getPendingPaginated({ page = 1, limit = 10 }) {
-    if (store) return store.getPendingPaginated({ page, limit });
     const offset = (page - 1) * limit;
-    const countResult = await pool.query(
-      "SELECT COUNT(*)::int AS total FROM users WHERE status = 'pending'"
-    );
-    const total = countResult.rows[0].total;
-    const { rows } = await pool.query(
-      `SELECT id, full_name, email, phone, status, created_at, updated_at
-       FROM users
-       WHERE status = 'pending'
-       ORDER BY created_at DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset]
-    );
-    return { users: rows, total, page, limit, totalPages: Math.ceil(total / limit) };
+    const { count, error: countErr } = await supabaseAdmin
+      .from("users")
+      .select("*", { count: "exact", head: true })
+      .eq("is_approved", false)
+      .eq("rejected", false);
+    if (countErr) throw countErr;
+    const total = count ?? 0;
+    const { data: rows, error } = await supabaseAdmin
+      .from("users")
+      .select("id, full_name, email, phone, is_approved, rejected, created_at, updated_at")
+      .eq("is_approved", false)
+      .eq("rejected", false)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) throw error;
+    const usersOut = (rows || []).map((u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      email: u.email,
+      phone: u.phone,
+      status: accountStatusFromRow(u),
+      created_at: u.created_at,
+      updated_at: u.updated_at || u.created_at,
+    }));
+    return {
+      users: usersOut,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
   },
 
   async updateStatus(id, status) {
-    if (store) return store.updateStatus(id, status);
-    if (!["approved", "rejected"].includes(status)) {
-      throw new Error("Invalid status");
+    if (!["approved", "rejected"].includes(status)) throw new Error("Invalid status");
+    const patch =
+      status === "approved"
+        ? {
+            is_approved: true,
+            rejected: false,
+            task_quota_total: TASK_DAILY_LIMIT,
+            task_quota_used: 0,
+            task_assignment_required: true,
+            task_assignment_requested_at: new Date().toISOString(),
+            task_assignment_granted_at: null,
+            prime_order_slots: [],
+            prime_negative_amount: 0,
+            image_cycle_state: buildImageCycles(),
+            has_received_first_tasks: true,
+            first_tasks_completed: 0,
+          }
+        : { is_approved: false, rejected: true };
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update(patch)
+      .eq("id", id)
+      .eq("is_approved", false)
+      .eq("rejected", false)
+      .select("id, full_name, email, phone, role, is_approved, rejected, created_at")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    if (status === "approved" && data.role === "user") {
+      const bonusAlreadyLogged = await hasBonusLog(id);
+      if (!bonusAlreadyLogged) {
+        await insertActivityLog(id, "You received 30 tasks (first-time bonus)");
+      }
     }
-    const { rows } = await pool.query(
-      `UPDATE users SET status = $1, updated_at = NOW()
-       WHERE id = $2 AND status = 'pending'
-       RETURNING id, full_name, email, phone, status, created_at`,
-      [status, id]
-    );
-    return rows[0] || null;
+    return {
+      id: data.id,
+      full_name: data.full_name,
+      email: data.email,
+      phone: data.phone,
+      status: accountStatusFromRow(data),
+      created_at: data.created_at,
+    };
   },
 
   async getUsersPaginated({ status = "approved", page = 1, limit = 10 }) {
-    if (store) return store.getUsersPaginated({ status, page, limit });
     const offset = (page - 1) * limit;
-    const countResult = await pool.query(
-      "SELECT COUNT(*)::int AS total FROM users WHERE status = $1 AND role = 'user'",
-      [status]
-    );
-    const total = countResult.rows[0].total;
-    try {
-      const { rows } = await pool.query(
-        `SELECT id, full_name, email, phone, status, created_at, updated_at, asset_balance,
-                COALESCE(task_quota_total, $4)::int AS task_quota_total,
-                COALESCE(task_quota_used, 0)::int AS task_quota_used,
-                task_assignment_required,
-                task_assignment_requested_at,
-                task_assignment_granted_at
-         FROM users
-         WHERE status = $1 AND role = 'user'
-         ORDER BY created_at DESC
-         LIMIT $2 OFFSET $3`,
-        [status, limit, offset, TASK_DAILY_LIMIT]
-      );
-      return { users: rows, total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
-    } catch (err) {
-      // Backward compatibility: DB may not have new task columns yet.
-      if (err?.code !== "42703") throw err;
-      const { rows } = await pool.query(
-        `SELECT id, full_name, email, phone, status, created_at, updated_at, asset_balance
-         FROM users
-         WHERE status = $1 AND role = 'user'
-         ORDER BY created_at DESC
-         LIMIT $2 OFFSET $3`,
-        [status, limit, offset]
-      );
-      return {
-        users: rows.map((r) => ({
-          ...r,
-          task_quota_total: TASK_DAILY_LIMIT,
-          task_quota_used: 0,
-          task_assignment_required: false,
-          task_assignment_requested_at: null,
-          task_assignment_granted_at: null,
-        })),
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit) || 1,
-      };
+    let q = supabaseAdmin.from("users").select("*", { count: "exact" }).eq("role", "user");
+    if (status === "approved") {
+      q = q.eq("is_approved", true).eq("rejected", false);
+    } else if (status === "pending") {
+      q = q.eq("is_approved", false).eq("rejected", false);
+    } else if (status === "rejected") {
+      q = q.eq("rejected", true);
     }
+    const { data: rows, error, count: fullCount } = await q
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) throw error;
+
+    const total = fullCount ?? 0;
+    const usersOut = (rows || []).map((u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      email: u.email,
+      phone: u.phone,
+      status: accountStatusFromRow(u),
+      asset_balance: Number(u.balance ?? 0),
+      task_quota_total: u.task_quota_total ?? TASK_DAILY_LIMIT,
+      task_quota_used: u.task_quota_used ?? 0,
+      task_assignment_required: Boolean(u.task_assignment_required),
+      task_assignment_requested_at: u.task_assignment_requested_at || null,
+      task_assignment_granted_at: u.task_assignment_granted_at || null,
+      created_at: u.created_at,
+      updated_at: u.updated_at || u.created_at,
+    }));
+    return {
+      users: usersOut,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  },
+
+  async deleteUserByAdmin(userId) {
+    const row = await loadUserRow(userId);
+    if (!row || row.role !== "user") return null;
+
+    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (authError) throw authError;
+
+    return {
+      id: row.id,
+      full_name: row.full_name,
+      email: row.email,
+    };
   },
 
   async updatePassword(userId, oldPasswordPlain, newPasswordPlain) {
-    if (store) return store.updatePassword(userId, oldPasswordPlain, newPasswordPlain);
-    const userRows = await pool.query(
-      `SELECT id, password_hash FROM users WHERE id = $1`,
-      [userId]
-    );
-    const user = userRows.rows[0];
-    if (!user) return null;
-    const valid = await bcrypt.compare(oldPasswordPlain, user.password_hash);
-    if (!valid) return false;
-    const newHash = await bcrypt.hash(newPasswordPlain, 10);
-    await pool.query(
-      `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
-      [newHash, userId]
-    );
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    const { data: signInData, error: signErr } = await supabaseAuth.auth.signInWithPassword({
+      email: row.email,
+      password: oldPasswordPlain,
+    });
+    if (signErr || !signInData?.user) return false;
+    const { error: upErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      password: newPasswordPlain,
+    });
+    if (upErr) throw upErr;
     return true;
   },
 
   async getStats() {
-    if (store) return store.getStats();
-    const totalResult = await pool.query(
-      "SELECT COUNT(*)::int AS total FROM users WHERE role = 'user'"
-    );
-    const pendingResult = await pool.query(
-      "SELECT COUNT(*)::int AS total FROM users WHERE status = 'pending' AND role = 'user'"
-    );
-    const approvedResult = await pool.query(
-      "SELECT COUNT(*)::int AS total FROM users WHERE status = 'approved' AND role = 'user'"
-    );
-    const adminsResult = await pool.query(
-      "SELECT COUNT(*)::int AS total FROM users WHERE role IN ('admin','super_admin')"
-    );
+    const { count: totalUsers } = await supabaseAdmin
+      .from("users")
+      .select("*", { count: "exact", head: true })
+      .eq("role", "user");
+    const { count: pendingApproval } = await supabaseAdmin
+      .from("users")
+      .select("*", { count: "exact", head: true })
+      .eq("role", "user")
+      .eq("is_approved", false)
+      .eq("rejected", false);
+    const { count: activeUsers } = await supabaseAdmin
+      .from("users")
+      .select("*", { count: "exact", head: true })
+      .eq("role", "user")
+      .eq("is_approved", true)
+      .eq("rejected", false);
+    const { count: totalAdmins } = await supabaseAdmin
+      .from("users")
+      .select("*", { count: "exact", head: true })
+      .in("role", ["admin", "super_admin"]);
     return {
-      totalUsers: totalResult.rows[0].total,
-      activeUsers: approvedResult.rows[0].total,
-      pendingApproval: pendingResult.rows[0].total,
-      totalAdmins: adminsResult.rows[0].total,
+      totalUsers: totalUsers ?? 0,
+      activeUsers: activeUsers ?? 0,
+      pendingApproval: pendingApproval ?? 0,
+      totalAdmins: totalAdmins ?? 0,
     };
-  },
-  verifyPassword(plain, hash) {
-    return bcrypt.compare(plain, hash);
   },
 
   async getAdmins() {
-    if (store) {
-      return store.getAdmins();
-    }
-    const { rows } = await pool.query(
-      `SELECT id, full_name, email, phone, role, admin_permissions, status, created_at, updated_at
-       FROM users
-       WHERE role IN ('admin', 'super_admin')
-       ORDER BY role DESC, created_at ASC`
-    );
-    return rows;
+    const { data: rows, error } = await supabaseAdmin
+      .from("users")
+      .select("id, full_name, email, phone, role, admin_permissions, is_approved, rejected, created_at, updated_at")
+      .in("role", ["admin", "super_admin"])
+      .order("role", { ascending: false })
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return (rows || []).map((u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      email: u.email,
+      phone: u.phone,
+      role: u.role,
+      admin_permissions: u.admin_permissions || "full",
+      status: accountStatusFromRow(u),
+      created_at: u.created_at,
+      updated_at: u.updated_at || u.created_at,
+    }));
   },
 
   async createAdmin({ fullName, email, phone, password, role = "admin", adminPermissions = "view_only" }) {
     if (!["admin", "super_admin"].includes(role)) {
       throw new Error("Invalid admin role");
     }
-    if (store) {
-      return store.createAdmin({ fullName, email, phone, password, role, adminPermissions });
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+      email: normalizedEmail,
+      password,
+      email_confirm: true,
+    });
+    if (authErr) throw authErr;
+    const id = authData.user.id;
+    const { data: row, error: insErr } = await supabaseAdmin
+      .from("users")
+      .insert({
+        id,
+        email: normalizedEmail,
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+        role,
+        admin_permissions: adminPermissions,
+        is_approved: true,
+        rejected: false,
+        balance: 0,
+        task_assignment_granted_at: nowIso(),
+      })
+      .select("*")
+      .single();
+    if (insErr) {
+      await supabaseAdmin.auth.admin.deleteUser(id);
+      throw insErr;
     }
-    const passwordHash = await bcrypt.hash(password, 10);
-    const { rows } = await pool.query(
-      `INSERT INTO users (full_name, email, phone, password_hash, status, role, admin_permissions)
-       VALUES ($1, $2, $3, $4, 'approved', $5, $6)
-       RETURNING id, full_name, email, phone, role, admin_permissions, status, created_at, updated_at`,
-      [fullName, email.trim().toLowerCase(), phone, passwordHash, role, adminPermissions]
-    );
-    return rows[0];
+    return {
+      id: row.id,
+      full_name: row.full_name,
+      email: row.email,
+      phone: row.phone,
+      role: row.role,
+      admin_permissions: row.admin_permissions,
+      status: accountStatusFromRow(row),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
   },
 
   async createAdminRequest({ fullName, email, phone, password, adminPermissions = "view_only" }) {
     const allowed = new Set(["view_only", "balance_only", "approve_only", "full"]);
     const permissionValue = allowed.has(adminPermissions) ? adminPermissions : "view_only";
-    if (store) {
-      return store.createAdminRequest({ fullName, email, phone, password, adminPermissions: permissionValue });
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+      email: normalizedEmail,
+      password,
+      email_confirm: true,
+    });
+    if (authErr) throw authErr;
+    const id = authData.user.id;
+    const { data: row, error: insErr } = await supabaseAdmin
+      .from("users")
+      .insert({
+        id,
+        email: normalizedEmail,
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+        role: "admin",
+        admin_permissions: permissionValue,
+        is_approved: false,
+        rejected: false,
+        balance: 0,
+        task_assignment_granted_at: nowIso(),
+      })
+      .select("*")
+      .single();
+    if (insErr) {
+      await supabaseAdmin.auth.admin.deleteUser(id);
+      throw insErr;
     }
-    const passwordHash = await bcrypt.hash(password, 10);
-    const { rows } = await pool.query(
-      `INSERT INTO users (full_name, email, phone, password_hash, status, role, admin_permissions)
-       VALUES ($1, $2, $3, $4, 'pending', 'admin', $5)
-       RETURNING id, full_name, email, phone, role, admin_permissions, status, created_at, updated_at`,
-      [fullName, email.trim().toLowerCase(), phone, passwordHash, permissionValue]
-    );
-    return rows[0];
+    return {
+      id: row.id,
+      full_name: row.full_name,
+      email: row.email,
+      phone: row.phone,
+      role: row.role,
+      admin_permissions: row.admin_permissions,
+      status: accountStatusFromRow(row),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
   },
 
   async updateAdminPermissions(id, { role, adminPermissions }) {
-    if (store) {
-      return store.updateAdminPermissions(id, { role, adminPermissions });
-    }
-    const updates = [];
-    const values = [];
-    let idx = 1;
-
+    const updates = {};
     if (role) {
-      if (!["admin", "super_admin"].includes(role)) {
-        throw new Error("Invalid admin role");
-      }
-      updates.push(`role = $${idx++}`);
-      values.push(role);
+      if (!["admin", "super_admin"].includes(role)) throw new Error("Invalid admin role");
+      updates.role = role;
     }
-    if (adminPermissions) {
-      updates.push(`admin_permissions = $${idx++}`);
-      values.push(adminPermissions);
-    }
-    if (!updates.length) return null;
-
-    values.push(id);
-    if (store) {
-      // For memory store we only care that call succeeds; skip implementation for brevity.
-      return null;
-    }
-    const { rows } = await pool.query(
-      `UPDATE users
-       SET ${updates.join(", ")}, updated_at = NOW()
-       WHERE id = $${idx} AND role IN ('admin','super_admin')
-       RETURNING id, full_name, email, phone, role, admin_permissions, status, created_at, updated_at`,
-      values
-    );
-    return rows[0] || null;
+    if (adminPermissions) updates.admin_permissions = adminPermissions;
+    if (!Object.keys(updates).length) return null;
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update(updates)
+      .eq("id", id)
+      .in("role", ["admin", "super_admin"])
+      .select("id, full_name, email, phone, role, admin_permissions, is_approved, rejected, created_at, updated_at")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      id: data.id,
+      full_name: data.full_name,
+      email: data.email,
+      phone: data.phone,
+      role: data.role,
+      admin_permissions: data.admin_permissions,
+      status: accountStatusFromRow(data),
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    };
   },
 
   async getTaskAssignmentStatus(userId) {
-    if (store) return store.getTaskAssignmentStatus(userId);
-    let row;
-    try {
-      const { rows } = await pool.query(
-        `SELECT id,
-                COALESCE(task_quota_total, $2)::int AS task_quota_total,
-                COALESCE(task_quota_used, 0)::int AS task_quota_used,
-                COALESCE(task_assignment_required, FALSE) AS task_assignment_required,
-                task_assignment_requested_at,
-                task_assignment_granted_at
-         FROM users
-         WHERE id = $1`,
-        [userId, TASK_DAILY_LIMIT]
-      );
-      row = rows[0];
-    } catch (err) {
-      if (err?.code !== "42703") throw err;
-      const { rows } = await pool.query(
-        `SELECT id FROM users WHERE id = $1`,
-        [userId]
-      );
-      row = rows[0]
-        ? {
-            id: rows[0].id,
-            task_quota_total: TASK_DAILY_LIMIT,
-            task_quota_used: 0,
-            task_assignment_required: false,
-            task_assignment_requested_at: null,
-            task_assignment_granted_at: null,
-          }
-        : null;
-    }
+    const row = await loadUserRow(userId);
     if (!row) return null;
 
     const total = Number(row.task_quota_total || TASK_DAILY_LIMIT);
     const used = Number(row.task_quota_used || 0);
     const required = Boolean(row.task_assignment_required);
-    const requestedAt = row.task_assignment_requested_at
-      ? new Date(row.task_assignment_requested_at)
-      : null;
-    const grantedAt = row.task_assignment_granted_at
-      ? new Date(row.task_assignment_granted_at)
-      : null;
+    const firstCompleted = Number(row.first_tasks_completed || 0);
+    const hasReceivedFirstTasks = Boolean(row.has_received_first_tasks);
+    const requestedAt = row.task_assignment_requested_at ? new Date(row.task_assignment_requested_at) : null;
+    const grantedAt = row.task_assignment_granted_at ? new Date(row.task_assignment_granted_at) : null;
+    const primeNegativeAmount = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
 
-    const now = Date.now();
-    const autoAssignMs = AUTO_ASSIGN_HOURS * 60 * 60 * 1000;
-    const needsApproval = required || used >= total;
-    const shouldAutoAssign =
-      needsApproval && requestedAt && now - requestedAt.getTime() >= autoAssignMs;
-
-    if (shouldAutoAssign) {
-      const { rows: updatedRows } = await pool.query(
-        `UPDATE users
-         SET task_quota_used = 0,
-             task_assignment_required = FALSE,
-             task_assignment_granted_at = NOW(),
-             task_assignment_requested_at = NULL,
-             task_quota_total = COALESCE(task_quota_total, $2),
-             updated_at = NOW()
-         WHERE id = $1
-         RETURNING id,
-                   COALESCE(task_quota_total, $2)::int AS task_quota_total,
-                   COALESCE(task_quota_used, 0)::int AS task_quota_used,
-                   COALESCE(task_assignment_required, FALSE) AS task_assignment_required,
-                   task_assignment_requested_at,
-                   task_assignment_granted_at`,
-        [userId, TASK_DAILY_LIMIT]
-      );
-      const r = updatedRows[0];
-      return {
-        userId,
-        quotaTotal: Number(r.task_quota_total || TASK_DAILY_LIMIT),
-        quotaUsed: Number(r.task_quota_used || 0),
-        remaining: Math.max(0, Number(r.task_quota_total || TASK_DAILY_LIMIT) - Number(r.task_quota_used || 0)),
-        requiresAdminAssignment: Boolean(r.task_assignment_required),
-        canPerformTasks: true,
-        nextAutoAssignAt: null,
-      };
-    }
-
+    const firstRemaining = Math.max(0, TASK_DAILY_LIMIT - firstCompleted);
     const remaining = Math.max(0, total - used);
-    const nextAutoAssignAt = needsApproval && requestedAt
-      ? new Date(requestedAt.getTime() + autoAssignMs).toISOString()
-      : null;
-    const canPerformTasks = remaining > 0 && !required;
+    const canUseFirstTasks = hasReceivedFirstTasks && firstCompleted < TASK_DAILY_LIMIT;
+    const canUseAssignedTasks = !required && used < total;
+    const canPerformTasks = canUseFirstTasks || canUseAssignedTasks;
     return {
       userId,
       quotaTotal: total,
@@ -548,139 +538,170 @@ export const User = {
       remaining,
       requiresAdminAssignment: required || used >= total,
       canPerformTasks,
-      nextAutoAssignAt,
+      nextAutoAssignAt: null,
       taskAssignmentRequestedAt: requestedAt ? requestedAt.toISOString() : null,
       taskAssignmentGrantedAt: grantedAt ? grantedAt.toISOString() : null,
+      primeNegativeAmount,
+      hasReceivedFirstTasks,
+      firstTasksCompleted: firstCompleted,
+      firstTasksRemaining: firstRemaining,
     };
   },
 
   async markTaskCompleted(userId, activityId = null) {
-    const idNum = Number(userId);
-    const activities = taskActivitiesByUser.get(idNum) || [];
-    const targetPending = activities.find(
-      (a) => a.status === "pending" && (activityId ? a.id === activityId : true)
-    );
+    let query = supabaseAdmin.from("user_tasks").select("*").eq("user_id", userId).eq("status", "open");
+    if (activityId) query = query.eq("id", activityId);
+    const { data: openRows, error: findErr } = await query.limit(1);
+    if (findErr) throw findErr;
+    const targetPending = openRows?.[0];
     if (!targetPending) {
       return { error: "No pending task found", code: "PENDING_TASK_NOT_FOUND" };
     }
-    if (targetPending.isPrime) {
+    if (targetPending.is_prime) {
       return { error: "check your acitivty task you get prime order", code: "PRIME_ORDER_PENDING" };
     }
-    if (store) {
-      const status = await store.markTaskCompleted(userId);
-      if (status?.code) return status;
-      // Keep runtime asset balance consistent with completed task commission.
-      if (Number.isFinite(Number(targetPending.commissionRs)) && Number(targetPending.commissionRs) > 0) {
-        await store.addToBalance(userId, Number(targetPending.commissionRs));
-      }
-      const now = nowIso();
-      const nextActivities = activities.map((a) =>
-        a.id === targetPending.id ? { ...a, status: "completed", completedAt: now } : a
-      );
-      taskActivitiesByUser.set(idNum, nextActivities);
-      pendingActivityByUser.delete(idNum);
-      return { ...(status || {}), activity: nextActivities.find((a) => a.id === targetPending.id) };
-    }
+
     const status = await this.getTaskAssignmentStatus(userId);
     if (!status) return { error: "User not found", code: "NOT_FOUND" };
     if (!status.canPerformTasks) {
       return { error: "Task assignment required", code: "TASK_ASSIGNMENT_REQUIRED", status };
     }
 
-    try {
-      const { rows } = await pool.query(
-        `UPDATE users
-         SET task_quota_used = COALESCE(task_quota_used, 0) + 1,
-             asset_balance = COALESCE(asset_balance, 0) + $3,
-             task_quota_total = COALESCE(task_quota_total, $2),
-             updated_at = NOW()
-         WHERE id = $1
-         RETURNING COALESCE(task_quota_total, $2)::int AS task_quota_total,
-                   COALESCE(task_quota_used, 0)::int AS task_quota_used`,
-        [userId, TASK_DAILY_LIMIT, Math.max(0, Number(targetPending.commissionRs) || 0)]
-      );
-      if (!rows[0]) return { error: "User not found", code: "NOT_FOUND" };
-      const total = Number(rows[0].task_quota_total || TASK_DAILY_LIMIT);
-      const used = Number(rows[0].task_quota_used || 0);
+    const commission = Math.max(0, Number(targetPending.payload?.commissionRs) || 0);
+    const wasFirstTimeTask = Boolean(targetPending.is_first_time);
 
-      if (used >= total) {
-        await pool.query(
-          `UPDATE users
-           SET task_assignment_required = TRUE,
-               task_assignment_requested_at = COALESCE(task_assignment_requested_at, NOW()),
-               updated_at = NOW()
-           WHERE id = $1`,
-          [userId]
-        );
+    const row = await loadUserRow(userId);
+    if (!row) return { error: "User not found", code: "NOT_FOUND" };
+    const total = Number(row.task_quota_total || TASK_DAILY_LIMIT);
+    const used = Number(row.task_quota_used || 0);
+    const firstTasksCompleted = Number(row.first_tasks_completed || 0);
+    const newBalance = Number(row.balance ?? 0) + commission;
+
+    const userPatch = {
+      balance: newBalance,
+      task_quota_total: total,
+    };
+    if (wasFirstTimeTask) {
+      userPatch.first_tasks_completed = firstTasksCompleted + 1;
+    } else {
+      userPatch.task_quota_used = used + 1;
+      if (used + 1 >= total) {
+        userPatch.task_assignment_required = true;
+        userPatch.task_assignment_requested_at = row.task_assignment_requested_at || new Date().toISOString();
       }
-    } catch (err) {
-      if (err?.code !== "42703") throw err;
-      // Legacy DB fallback: allow completion when columns are not present.
     }
 
-    const now = nowIso();
-    const nextActivities = activities.map((a) =>
-      a.id === targetPending.id ? { ...a, status: "completed", completedAt: now } : a
+    const { error: upUtErr } = await supabaseAdmin
+      .from("user_tasks")
+      .update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", targetPending.id)
+      .eq("status", "open");
+    if (upUtErr) throw upUtErr;
+
+    const { error: upErr } = await supabaseAdmin.from("users").update(userPatch).eq("id", userId);
+    if (upErr) throw upErr;
+
+    const completedTaskNo = Number(targetPending.task_no || 0);
+    await insertActivityLog(
+      userId,
+      wasFirstTimeTask
+        ? `Completed first-time task ${completedTaskNo}/${TASK_DAILY_LIMIT}`
+        : `Completed admin assigned task ${completedTaskNo}`
     );
-    taskActivitiesByUser.set(idNum, nextActivities);
-    pendingActivityByUser.delete(idNum);
+
+    if (wasFirstTimeTask && firstTasksCompleted + 1 >= TASK_DAILY_LIMIT) {
+      await insertActivityLog(userId, "First-time bonus tasks completed. No tasks available. Check your activity track");
+    }
+
+    if (commission > 0) {
+      await insertTransaction(userId, "task_reward", commission, "approved");
+    }
+
     const nextStatus = await this.getTaskAssignmentStatus(userId);
-    return { ...(nextStatus || {}), activity: nextActivities.find((a) => a.id === targetPending.id) };
+    const activity = {
+      ...targetPending.payload,
+      id: targetPending.id,
+      status: "completed",
+      completedAt: nowIso(),
+    };
+    return { ...(nextStatus || {}), activity };
   },
 
   async adminAssignTasks(userId) {
-    const idNum = Number(userId);
-    // Fresh assignment should clear any previously configured prime slots.
-    primeOrderSlotsByUser.delete(idNum);
-    if (store) {
-      const status = await store.adminAssignTasks(userId);
-      if (!status) return null;
-      const firstTaskPending = buildPendingActivity(idNum, 1, false);
-      const existing = taskActivitiesByUser.get(idNum) || [];
-      const completedOnly = existing.filter((a) => a.status !== "pending");
-      taskActivitiesByUser.set(idNum, [firstTaskPending, ...completedOnly]);
-      pendingActivityByUser.set(idNum, firstTaskPending.id);
-      return status;
-    }
-    let rows;
-    try {
-      ({ rows } = await pool.query(
-        `UPDATE users
-         SET task_quota_total = $2,
-             task_quota_used = 0,
-             task_assignment_required = FALSE,
-             task_assignment_requested_at = NULL,
-             task_assignment_granted_at = NOW(),
-             updated_at = NOW()
-         WHERE id = $1 AND role = 'user'
-         RETURNING id`,
-        [userId, TASK_DAILY_LIMIT]
-      ));
-    } catch (err) {
-      if (err?.code !== "42703") throw err;
-      ({ rows } = await pool.query(
-        `UPDATE users
-         SET updated_at = NOW()
-         WHERE id = $1 AND role = 'user'
-         RETURNING id`,
-        [userId]
-      ));
-    }
-    if (!rows[0]) return null;
-    const slots = new Set();
-    imageCyclesByUser.set(idNum, buildImageCycles());
-    const firstTaskPending = buildPendingActivity(idNum, 1, slots.has(1));
-    const existing = taskActivitiesByUser.get(idNum) || [];
-    const completedOnly = existing.filter((a) => a.status !== "pending");
-    taskActivitiesByUser.set(idNum, [firstTaskPending, ...completedOnly]);
-    pendingActivityByUser.set(idNum, firstTaskPending.id);
+    const row = await loadUserRow(userId);
+    if (!row || row.role !== "user") return null;
+
+    await supabaseAdmin.from("user_tasks").delete().eq("user_id", userId).eq("status", "open");
+
+    const { error } = await supabaseAdmin
+      .from("users")
+      .update({
+        has_received_first_tasks: true,
+        task_quota_total: TASK_DAILY_LIMIT,
+        task_quota_used: 0,
+        task_assignment_required: false,
+        task_assignment_requested_at: null,
+        task_assignment_granted_at: new Date().toISOString(),
+        prime_order_slots: [],
+        prime_negative_amount: 0,
+        image_cycle_state: buildImageCycles(),
+      })
+      .eq("id", userId)
+      .eq("role", "user");
+    if (error) throw error;
+
+    await insertActivityLog(userId, "Admin assigned 30 tasks");
+    const firstTaskPending = await this._insertOpenTask(userId, 1, false, []);
+    if (!firstTaskPending) return null;
     return this.getTaskAssignmentStatus(userId);
   },
 
-  async adminAssignPrimeOrders(userId, slots = []) {
-    const idNum = Number(userId);
-    if (!Number.isFinite(idNum)) return null;
-    const user = await this.findById(idNum);
+  async _insertOpenTask(userId, taskNo, isPrime, primeSlots, isFirstTime = false) {
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    let imageState = parseImageState(row.image_cycle_state) || buildImageCycles();
+    const slotSet = new Set(primeSlots || row.prime_order_slots || []);
+    const isPrimeTask = Boolean(slotSet.has(taskNo));
+    const { task, imageState: nextState } = makeUserTaskFromState(taskNo, isPrimeTask, imageState);
+    await supabaseAdmin.from("users").update({ image_cycle_state: nextState }).eq("id", userId);
+
+    const createdAt = nowIso();
+    const activity = {
+      id: null,
+      title: task.title,
+      orderNumber: generateOrderNumber(new Date(createdAt)),
+      quantityRs: task.quantityRs,
+      commissionRs: task.commissionRs,
+      createdAt,
+      status: "pending",
+      taskNo,
+      isPrime: isPrimeTask,
+      task,
+    };
+
+    const { data: inserted, error } = await supabaseAdmin
+      .from("user_tasks")
+      .insert({
+        user_id: userId,
+        task_id: null,
+        status: "open",
+        task_no: taskNo,
+        is_prime: isPrimeTask,
+        is_first_time: Boolean(isFirstTime),
+        payload: activity,
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    activity.id = inserted.id;
+    return { activity, task };
+  },
+
+  async adminAssignPrimeOrders(userId, slots = [], primeNegativeAmount = 0) {
+    const user = await loadUserRow(userId);
     if (!user || user.role !== "user") return null;
     const cleaned = Array.from(
       new Set(
@@ -689,89 +710,138 @@ export const User = {
           .filter((n) => Number.isInteger(n) && n >= 1 && n <= TASK_DAILY_LIMIT)
       )
     ).sort((a, b) => a - b);
-    primeOrderSlotsByUser.set(idNum, new Set(cleaned));
-    const activities = taskActivitiesByUser.get(idNum) || [];
-    const currentPending = activities.find((a) => a.status === "pending") || null;
+
+    const safeNegative = cleaned.length ? Math.max(0, Number(primeNegativeAmount) || 0) : 0;
+    await supabaseAdmin
+      .from("users")
+      .update({ prime_order_slots: cleaned, prime_negative_amount: safeNegative })
+      .eq("id", userId);
+
+    const { data: openList } = await supabaseAdmin
+      .from("user_tasks")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "open")
+      .limit(1);
+    const currentPending = openList?.[0];
+
     if (!currentPending) {
-      const status = await this.getTaskAssignmentStatus(idNum);
+      const status = await this.getTaskAssignmentStatus(userId);
       if (!status || !status.canPerformTasks) {
-        return { userId: idNum, slots: cleaned };
+        return { userId, slots: cleaned };
       }
-      const nextTaskNo = Math.min(
-        TASK_DAILY_LIMIT,
-        Math.max(1, Number(status.quotaUsed || 0) + 1)
-      );
-      const nextPending = buildPendingActivity(
-        idNum,
-        nextTaskNo,
-        cleaned.includes(nextTaskNo)
-      );
-      taskActivitiesByUser.set(idNum, [nextPending, ...activities]);
-      pendingActivityByUser.set(idNum, nextPending.id);
+      const nextTaskNo = Math.min(TASK_DAILY_LIMIT, Math.max(1, Number(status.quotaUsed || 0) + 1));
+      await supabaseAdmin.from("user_tasks").delete().eq("user_id", userId).eq("status", "open");
+      await this._insertOpenTask(userId, nextTaskNo, false, cleaned);
     } else {
-      const currentTaskNo = Number(currentPending.taskNo) || 1;
-      const replacement = buildPendingActivity(idNum, currentTaskNo, cleaned.includes(currentTaskNo));
-      const nextActivities = activities.map((a) =>
-        a.id === currentPending.id ? replacement : a
-      );
-      taskActivitiesByUser.set(idNum, nextActivities);
-      pendingActivityByUser.set(idNum, replacement.id);
+      const currentTaskNo = Number(currentPending.task_no) || 1;
+      await supabaseAdmin.from("user_tasks").delete().eq("id", currentPending.id);
+      await this._insertOpenTask(userId, currentTaskNo, false, cleaned);
     }
-    return { userId: idNum, slots: cleaned };
+    return { userId, slots: cleaned };
   },
 
   async getPrimeOrderSlots(userId) {
-    const idNum = Number(userId);
-    if (!Number.isFinite(idNum)) return [];
-    return Array.from(primeOrderSlotsByUser.get(idNum) || []).sort((a, b) => a - b);
+    const row = await loadUserRow(userId);
+    if (!row) return [];
+    return Array.isArray(row.prime_order_slots) ? row.prime_order_slots.sort((a, b) => a - b) : [];
   },
 
   async getTaskActivities(userId) {
-    const idNum = Number(userId);
-    if (!Number.isFinite(idNum)) return [];
-    return [...(taskActivitiesByUser.get(idNum) || [])];
+    const [{ data: rows, error }, { data: logs, error: logErr }] = await Promise.all([
+      supabaseAdmin
+        .from("user_tasks")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false }),
+      supabaseAdmin.from("activity_logs").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
+    ]);
+    if (error) throw error;
+    if (logErr) throw logErr;
+    const taskEntries = (rows || []).map((r) => {
+      const p = r.payload || {};
+      return {
+        id: r.id,
+        title: p.title,
+        orderNumber: p.orderNumber,
+        quantityRs: p.quantityRs,
+        commissionRs: p.commissionRs,
+        createdAt: r.created_at,
+        status: r.status === "open" ? "pending" : "completed",
+        taskNo: r.task_no,
+        isPrime: r.is_prime,
+        isFirstTime: Boolean(r.is_first_time),
+        message: p.message || null,
+        activityType: "task",
+      };
+    });
+    const logEntries = (logs || []).map((entry) => ({
+      id: entry.id,
+      title: "Activity",
+      orderNumber: null,
+      quantityRs: null,
+      commissionRs: null,
+      createdAt: entry.created_at,
+      status: "completed",
+      taskNo: null,
+      isPrime: false,
+      isFirstTime: false,
+      message: entry.message,
+      activityType: "log",
+    }));
+    return [...taskEntries, ...logEntries].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   },
 
   async openTask(userId) {
-    const idNum = Number(userId);
-    if (!Number.isFinite(idNum)) return { error: "User not found", code: "NOT_FOUND" };
-    const status = await this.getTaskAssignmentStatus(idNum);
+    const row = await loadUserRow(userId);
+    if (!row) return { error: "User not found", code: "NOT_FOUND" };
+    const status = await this.getTaskAssignmentStatus(userId);
     if (!status) return { error: "User not found", code: "NOT_FOUND" };
-    if (!status.canPerformTasks) {
-      return { error: "You have unfinished orders, please deal with them in time", code: "TASK_ASSIGNMENT_REQUIRED", status };
-    }
-    const activities = taskActivitiesByUser.get(idNum) || [];
-    const existingPending = activities.find((a) => a.status === "pending");
+
+    const { data: openList } = await supabaseAdmin
+      .from("user_tasks")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "open")
+      .limit(1);
+    const existingPending = openList?.[0];
     if (existingPending) {
-      if (existingPending.isPrime) {
+      const p = existingPending.payload || {};
+      const activity = { ...p, id: existingPending.id, status: "pending" };
+      if (existingPending.is_prime) {
         return {
           code: "PRIME_ORDER_PENDING",
           error: "check your acitivty task you get prime order",
           status,
-          activity: existingPending,
+          activity,
         };
       }
-      return { status, activity: existingPending, task: existingPending.task };
+      return { status, activity, task: p.task };
     }
-    const taskNo = Number(status.quotaUsed || 0) + 1;
-    const isPrime = Boolean(primeOrderSlotsByUser.get(idNum)?.has(taskNo));
-    const task = makeUserTask(idNum, taskNo, isPrime);
-    const createdAt = nowIso();
-    const activity = {
-      id: `act-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-      title: task.title,
-      orderNumber: generateOrderNumber(new Date(createdAt)),
-      quantityRs: task.quantityRs,
-      commissionRs: task.commissionRs,
-      createdAt,
-      status: "pending",
-      taskNo,
-      isPrime,
-      task,
-    };
-    taskActivitiesByUser.set(idNum, [activity, ...activities]);
-    pendingActivityByUser.set(idNum, activity.id);
-    if (isPrime) {
+
+    const firstCompleted = Number(row.first_tasks_completed || 0);
+    const hasReceivedFirstTasks = Boolean(row.has_received_first_tasks);
+    const primeSlots = row?.prime_order_slots || [];
+
+    let taskNo = null;
+    let isFirstTime = false;
+    if (hasReceivedFirstTasks && firstCompleted < TASK_DAILY_LIMIT) {
+      taskNo = firstCompleted + 1;
+      isFirstTime = true;
+    } else if (!row.task_assignment_required && Number(row.task_quota_used || 0) < Number(row.task_quota_total || TASK_DAILY_LIMIT)) {
+      taskNo = Number(row.task_quota_used || 0) + 1;
+    } else {
+      return {
+        error: "No tasks available. Check your activity track",
+        code: "TASK_ASSIGNMENT_REQUIRED",
+        status,
+      };
+    }
+
+    const built = await this._insertOpenTask(userId, taskNo, false, primeSlots, isFirstTime);
+    if (!built) return { error: "User not found", code: "NOT_FOUND" };
+    const { activity, task } = built;
+    if (activity.isPrime) {
       return {
         code: "PRIME_ORDER_PENDING",
         error: "check your acitivty task you get prime order",
@@ -782,17 +852,21 @@ export const User = {
     return { status, activity, task };
   },
 
-  // Mark all current sessions for this user as invalid (force logout on next request).
   invalidateSessions(userId) {
-    const idNum = Number(userId);
-    if (!Number.isFinite(idNum)) return;
-    invalidatedUserIds.add(idNum);
+    return supabaseAdmin
+      .from("users")
+      .update({ sessions_invalidated_at: new Date().toISOString() })
+      .eq("id", userId);
   },
 
-  // Check if this user's sessions have been invalidated.
-  isSessionInvalidated(userId) {
-    const idNum = Number(userId);
-    if (!Number.isFinite(idNum)) return false;
-    return invalidatedUserIds.has(idNum);
+  /** True after logout until the next successful login clears the flag. */
+  async isSessionBlocked(userId) {
+    const row = await loadUserRow(userId);
+    return row?.sessions_invalidated_at != null;
+  },
+
+  async clearSessionInvalidation(userId) {
+    const { error } = await supabaseAdmin.from("users").update({ sessions_invalidated_at: null }).eq("id", userId);
+    if (error) throw error;
   },
 };

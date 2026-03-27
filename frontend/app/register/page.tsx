@@ -35,17 +35,25 @@ export default function RegisterPage() {
       setError("Please enter your password.");
       return;
     }
+    if (!confirmPassword) {
+      setError("Please confirm your password.");
+      return;
+    }
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
+      return;
+    }
+    if (!invitationCode.trim()) {
+      setError("Please enter invitation code.");
       return;
     }
 
     setLoading(true);
     const { data, error: resError } = await authApi.register({
-      fullName: mobile.trim(), // adapt as needed for backend
-      email: `${mobile.trim()}@example.com`, // placeholder email derived from mobile
       phone: mobile.trim(),
       password,
+      confirmPassword,
+      invitationCode: invitationCode.trim(),
     });
     setLoading(false);
 

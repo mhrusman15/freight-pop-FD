@@ -79,7 +79,7 @@ export default function ProfileAboutHelpFreezePage() {
           </p>
           <p>
             Once you successfully complete the assigned{" "}
-            <strong>Luxury Order</strong>, the corresponding order will be
+            <strong>Prime order</strong>, the corresponding order will be
             released and marked as completed.
           </p>
           <p>
@@ -88,7 +88,7 @@ export default function ProfileAboutHelpFreezePage() {
           <p>
             If you're unable to complete your current task within{" "}
             <strong>24 hours</strong>, and you <strong>don't request an extension</strong>{" "}
-            through <strong>Honeywell Support</strong>, your{" "}
+            through <strong>Freight-pop Support</strong>, your{" "}
             <strong>reputation score</strong> may be negatively affected. A
             lower reputation score can:
           </p>
@@ -113,7 +113,7 @@ export default function ProfileAboutHelpFreezePage() {
           </p>
           <p>
             For any delays, concerns, or extensions, please contact{" "}
-            <strong>Honeywell Support</strong> in advance.
+            <strong>Freight-pop Support</strong> in advance.
           </p>
         </div>
       </div>

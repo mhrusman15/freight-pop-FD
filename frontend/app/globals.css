@@ -69,3 +69,30 @@
     color: #ffffff;
   }
 }
+
+/* Global neutral-surface theme normalization.
+   Light mode => white surfaces + black text.
+   Dark mode => blue surfaces + white text. */
+html.theme-light :is(.bg-white, .bg-slate-50, .bg-slate-100, .bg-slate-200, .bg-slate-700, .bg-slate-800, .bg-slate-900) {
+  background-color: #ffffff !important;
+}
+
+html.theme-light :is(.text-black, .text-slate-50, .text-slate-100, .text-slate-200, .text-slate-300, .text-slate-400, .text-slate-500, .text-slate-600, .text-slate-700, .text-slate-800, .text-slate-900) {
+  color: #000000 !important;
+}
+
+html.theme-light :is(.border-slate-50, .border-slate-100, .border-slate-200, .border-slate-300, .border-slate-400, .border-slate-500, .border-slate-600, .border-slate-700, .border-slate-800, .border-slate-900) {
+  border-color: #d1d5db !important;
+}
+
+html.theme-dark :is(.bg-white, .bg-slate-50, .bg-slate-100, .bg-slate-200, .bg-slate-700, .bg-slate-800, .bg-slate-900) {
+  background-color: #0a2a66 !important;
+}
+
+html.theme-dark :is(.text-black, .text-slate-50, .text-slate-100, .text-slate-200, .text-slate-300, .text-slate-400, .text-slate-500, .text-slate-600, .text-slate-700, .text-slate-800, .text-slate-900) {
+  color: #ffffff !important;
+}
+
+html.theme-dark :is(.border-slate-50, .border-slate-100, .border-slate-200, .border-slate-300, .border-slate-400, .border-slate-500, .border-slate-600, .border-slate-700, .border-slate-800, .border-slate-900) {
+  border-color: #3b82f6 !important;
+}

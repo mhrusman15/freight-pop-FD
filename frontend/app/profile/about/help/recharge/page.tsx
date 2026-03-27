@@ -73,7 +73,7 @@ export default function ProfileAboutHelpRechargePage() {
           <p>
             To recharge your account, please visit the <strong>"Personal"</strong>{" "}
             page and click on the <strong>"Recharge"</strong> button. You will
-            be redirected to <strong>Honeywell Support</strong>, where the
+            be redirected to <strong>Freight-pop Support</strong>, where the
             latest payment instructions and designated account details are
             provided.
           </p>
@@ -96,7 +96,7 @@ export default function ProfileAboutHelpRechargePage() {
           </p>
           <p>
             <strong>
-              If you have any questions, please confirm with Honeywell Prime
+              If you have any questions, please confirm with Freight-pop Prime
               Support first.
             </strong>
           </p>
@@ -112,7 +112,7 @@ export default function ProfileAboutHelpRechargePage() {
           </p>
           <p>
             If you experience any difficulties during the recharge process, our{" "}
-            <strong>Honeywell Support</strong> team is available to assist you
+            <strong>Freight-pop Support</strong> team is available to assist you
             in real time.
           </p>
         </div>

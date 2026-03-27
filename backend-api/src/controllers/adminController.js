@@ -1,4 +1,5 @@
 import { User } from "../models/User.js";
+import { isValidUuid } from "../utils/uuid.js";
 
 export async function getStats(req, res) {
   try {
@@ -28,8 +29,8 @@ export async function getUsers(req, res) {
 
 export async function updateUserBalance(req, res) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
       return res.status(400).json({ error: "Invalid user id" });
     }
     const value = req.body?.value;
@@ -41,7 +42,6 @@ export async function updateUserBalance(req, res) {
     if (newBalance == null) {
       return res.status(404).json({ error: "User not found" });
     }
-    // Keep user session active; balance sync is handled by user polling.
     res.json({ balance: newBalance, userId: id });
   } catch (err) {
     console.error("Update balance error:", err);
@@ -85,8 +85,8 @@ export async function createAdmin(req, res) {
 
 export async function updateAdmin(req, res) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
       return res.status(400).json({ error: "Invalid admin id" });
     }
     const { role, permissions } = req.body || {};
@@ -115,8 +115,8 @@ export async function getPendingUsers(req, res) {
 
 export async function approveUser(req, res) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
       return res.status(400).json({ error: "Invalid user id" });
     }
     const target = await User.findById(id);
@@ -136,8 +136,8 @@ export async function approveUser(req, res) {
 
 export async function rejectUser(req, res) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
       return res.status(400).json({ error: "Invalid user id" });
     }
     const target = await User.findById(id);
@@ -157,15 +157,15 @@ export async function rejectUser(req, res) {
 
 export async function assignUserTasks(req, res) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
       return res.status(400).json({ error: "Invalid user id" });
     }
     const status = await User.adminAssignTasks(id);
     if (!status) {
       return res.status(404).json({ error: "User not found" });
     }
-    res.json({ message: "29 tasks assigned", status });
+    res.json({ message: "30 tasks assigned", status });
   } catch (err) {
     console.error("Assign tasks error:", err);
     res.status(500).json({ error: "Failed to assign tasks" });
@@ -174,12 +174,18 @@ export async function assignUserTasks(req, res) {
 
 export async function assignPrimeOrders(req, res) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
       return res.status(400).json({ error: "Invalid user id" });
     }
     const slots = Array.isArray(req.body?.slots) ? req.body.slots : [];
-    const assigned = await User.adminAssignPrimeOrders(id, slots);
+    const noNegative = Boolean(req.body?.noNegative);
+    const rawNegative = req.body?.negativeAmount;
+    const negativeAmount = noNegative ? 0 : Math.abs(Number(rawNegative ?? 0));
+    if (!Number.isFinite(negativeAmount)) {
+      return res.status(400).json({ error: "Invalid negative amount" });
+    }
+    const assigned = await User.adminAssignPrimeOrders(id, slots, negativeAmount);
     if (!assigned) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -187,5 +193,27 @@ export async function assignPrimeOrders(req, res) {
   } catch (err) {
     console.error("Assign prime orders error:", err);
     res.status(500).json({ error: "Failed to assign prime orders" });
+  }
+}
+
+export async function deleteUser(req, res) {
+  try {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+    if (id === req.userId) {
+      return res.status(400).json({ error: "You cannot delete your own account" });
+    }
+
+    const deleted = await User.deleteUserByAdmin(id);
+    if (!deleted) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({ message: "User deleted", user: deleted });
+  } catch (err) {
+    console.error("Delete user error:", err);
+    res.status(500).json({ error: "Failed to delete user" });
   }
 }

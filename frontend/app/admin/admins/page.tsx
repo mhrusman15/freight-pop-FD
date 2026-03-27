@@ -29,8 +29,8 @@ export default function AdminAdminsPage() {
   const [newRole, setNewRole] = useState<"admin" | "super_admin">("admin");
   const [newPermissions, setNewPermissions] = useState("view_only");
 
-  const [savingId, setSavingId] = useState<number | null>(null);
-  const [actionId, setActionId] = useState<number | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [actionId, setActionId] = useState<string | null>(null);
 
   const currentUser = typeof window !== "undefined" ? getAuthUser() : null;
   const isSuperAdmin = currentUser?.role === "super_admin";

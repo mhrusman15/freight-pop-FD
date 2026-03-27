@@ -5,7 +5,7 @@ import { adminApi, type AdminUserRow } from "@/lib/api";
 import { canAdmin, getAdminPermission, isSuperAdmin } from "@/lib/auth-store";
 
 const PAGE_SIZE = 10;
-const TASK_ASSIGN_LIMIT = 29;
+const TASK_ASSIGN_LIMIT = 30;
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString("en-US", {
@@ -29,15 +29,18 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<"approved" | "pending" | "rejected">("approved");
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
-  const [savingId, setSavingId] = useState<number | null>(null);
-  const [assigningId, setAssigningId] = useState<number | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [success, setSuccess] = useState("");
   const [primeModalUser, setPrimeModalUser] = useState<AdminUserRow | null>(null);
   const [primeSlots, setPrimeSlots] = useState<number[]>([]);
   const [savingPrime, setSavingPrime] = useState(false);
   const [primeAssignMode, setPrimeAssignMode] = useState<"prime_only" | "assign_with_prime">("prime_only");
+  const [primeNegativeMode, setPrimeNegativeMode] = useState<"none" | "custom" | null>(null);
+  const [primeNegativeAmount, setPrimeNegativeAmount] = useState<string>("");
 
   const load = useCallback(
     async (pageNum = 1) => {
@@ -88,6 +91,8 @@ export default function AdminUsersPage() {
     setPrimeAssignMode("assign_with_prime");
     setPrimeModalUser(user);
     setPrimeSlots([]);
+    setPrimeNegativeMode(null);
+    setPrimeNegativeAmount("");
     setError("");
     setSuccess(
       `Select prime order numbers for ${user.full_name}. If no prime order, select 0 and save.`
@@ -111,10 +116,23 @@ export default function AdminUsersPage() {
       setError("Please select prime order numbers, or select 0 for no prime orders.");
       return;
     }
+    const normalizedSlots = primeSlots.includes(0) ? [] : primeSlots;
+    if (normalizedSlots.length > 0 && primeNegativeMode === null) {
+      setError("Please choose negative amount option: 'No negative' or 'Set negative amount'.");
+      return;
+    }
     setSavingPrime(true);
     setError("");
     setSuccess("");
-    const normalizedSlots = primeSlots.includes(0) ? [] : primeSlots;
+    const noNegative = primeSlots.includes(0) || primeNegativeMode === "none" || normalizedSlots.length === 0;
+    const negativeAmountNum = Math.abs(Number(primeNegativeAmount || 0));
+    if (!noNegative) {
+      if (!Number.isFinite(negativeAmountNum) || negativeAmountNum <= 0) {
+        setSavingPrime(false);
+        setError("Please enter a valid negative amount (greater than 0), or select 'No negative'.");
+        return;
+      }
+    }
     if (primeAssignMode === "assign_with_prime") {
       setAssigningId(primeModalUser.id);
       const assignRes = await adminApi.assignUserTasks(primeModalUser.id);
@@ -126,7 +144,10 @@ export default function AdminUsersPage() {
       }
       setAssigningId(null);
     }
-    const res = await adminApi.assignPrimeOrders(primeModalUser.id, normalizedSlots);
+    const res = await adminApi.assignPrimeOrders(primeModalUser.id, normalizedSlots, {
+      noNegative,
+      negativeAmount: noNegative ? 0 : negativeAmountNum,
+    });
     setSavingPrime(false);
     if (res.error) {
       setError(res.error);
@@ -136,6 +157,8 @@ export default function AdminUsersPage() {
     setPrimeModalUser(null);
     setPrimeSlots([]);
     setPrimeAssignMode("prime_only");
+    setPrimeNegativeMode(null);
+    setPrimeNegativeAmount("");
     load(page);
   };
 
@@ -171,6 +194,31 @@ export default function AdminUsersPage() {
     setEditingId(null);
     setEditingValue("");
     load(page);
+  };
+
+  const handleDeleteUser = async (user: AdminUserRow) => {
+    if (!canBalance) return;
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        `Delete user ${user.full_name} (${user.email})? This will permanently remove this user and related data from Supabase.`
+      );
+      if (!confirmed) return;
+    }
+    setDeletingId(user.id);
+    setError("");
+    setSuccess("");
+    const res = await adminApi.deleteUser(user.id);
+    setDeletingId(null);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    if (editingId === user.id) {
+      setEditingId(null);
+      setEditingValue("");
+    }
+    setSuccess(`User ${user.full_name} deleted successfully.`);
+    load(1);
   };
 
   const goToPage = (newPage: number) => {
@@ -303,6 +351,8 @@ export default function AdminUsersPage() {
                 setPrimeModalUser(user);
                 setPrimeSlots([]);
                 setPrimeAssignMode("prime_only");
+                setPrimeNegativeMode(null);
+                setPrimeNegativeAmount("");
               }}
               className="inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-violet-700"
             >
@@ -340,6 +390,60 @@ export default function AdminUsersPage() {
                 ? `Select prime order numbers before assigning ${TASK_ASSIGN_LIMIT} tasks. If no prime order, select 0 and save.`
                 : `Select task numbers (1-${TASK_ASSIGN_LIMIT}) to mark as prime orders for this user.`}
             </p>
+            <p className="mt-1 text-xs text-red-600 dark:text-red-300">
+              Prime order blocks task continuation on user side and shows a recharge warning until balance is topped up.
+            </p>
+            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+              <div className="font-semibold text-slate-900 dark:text-slate-100">Prime negative amount (optional)</div>
+              <div className="mt-2 flex flex-col gap-2">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="primeNegativeMode"
+                    checked={primeNegativeMode === "none"}
+                    onChange={() => setPrimeNegativeMode("none")}
+                    disabled={primeSlots.includes(0)}
+                  />
+                  <span>No negative</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="primeNegativeMode"
+                    checked={primeNegativeMode === "custom"}
+                    onChange={() => setPrimeNegativeMode("custom")}
+                    disabled={primeSlots.includes(0)}
+                  />
+                  <span>Set negative amount</span>
+                </label>
+                {primeNegativeMode === "custom" && !primeSlots.includes(0) ? (
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={primeNegativeAmount}
+                      onChange={(e) => setPrimeNegativeAmount(e.target.value)}
+                      className="w-40 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-50"
+                      placeholder="e.g. 1500"
+                    />
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      This will show as negative in Total Capital.
+                    </span>
+                  </div>
+                ) : null}
+                {primeSlots.includes(0) ? (
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    Negative amount is disabled when selecting “0 - No prime order”.
+                  </div>
+                ) : null}
+                {!primeSlots.includes(0) && primeNegativeMode === null ? (
+                  <div className="text-xs text-amber-600 dark:text-amber-300">
+                    Select one option before saving: No negative or Set negative amount.
+                  </div>
+                ) : null}
+              </div>
+            </div>
             <div className="mt-3">
               <button
                 type="button"
@@ -438,6 +542,9 @@ export default function AdminUsersPage() {
                     <th className="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 sm:px-4 sm:py-3">
                       Task Assign
                     </th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 sm:px-4 sm:py-3">
+                      Delete
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -525,6 +632,16 @@ export default function AdminUsersPage() {
                           className="rounded-md bg-sky-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
                         >
                           {assigningId === user.id ? "Assigning…" : `Assign ${TASK_ASSIGN_LIMIT}`}
+                        </button>
+                      </td>
+                      <td className="px-2 py-2 text-sm sm:px-4 sm:py-3">
+                        <button
+                          type="button"
+                          disabled={deletingId === user.id || !canBalance}
+                          onClick={() => handleDeleteUser(user)}
+                          className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                        >
+                          {deletingId === user.id ? "Deleting..." : "Delete"}
                         </button>
                       </td>
                     </tr>

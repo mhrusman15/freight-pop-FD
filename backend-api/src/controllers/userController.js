@@ -19,7 +19,7 @@ export async function deposit(req, res) {
     return res.status(400).json({ error: "Invalid amount" });
   }
   try {
-    const newBalance = await User.addToBalance(req.userId, amount);
+    const newBalance = await User.addToBalance(req.userId, amount, { recordDeposit: true });
     if (newBalance == null) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -51,7 +51,7 @@ export async function completeTask(req, res) {
     }
     if (status.code === "TASK_ASSIGNMENT_REQUIRED") {
       return res.status(403).json({
-        error: "You have unfinished orders, please deal with them in time",
+        error: "Check your activity track",
         code: "TASK_ASSIGNMENT_REQUIRED",
         status: status.status,
       });
@@ -79,7 +79,10 @@ export async function openTask(req, res) {
       return res.status(404).json({ error: "User not found", code: "NOT_FOUND" });
     }
     if (result.code === "TASK_ASSIGNMENT_REQUIRED") {
-      return res.status(403).json(result);
+      return res.status(403).json({
+        ...result,
+        error: "No tasks available. Check your activity track",
+      });
     }
     if (result.code === "PRIME_ORDER_PENDING") {
       return res.status(409).json(result);

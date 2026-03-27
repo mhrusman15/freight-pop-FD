@@ -82,7 +82,7 @@ export default function AdminDashboardPage() {
   const [recentActiveUsers, setRecentActiveUsers] = useState<AdminUserRow[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
-  const [actionId, setActionId] = useState<number | null>(null);
+  const [actionId, setActionId] = useState<string | null>(null);
 
   const loadStats = useCallback(async () => {
     const res = await adminApi.getStats();
@@ -139,7 +139,7 @@ export default function AdminDashboardPage() {
     ]);
   }, []);
 
-  const handleApprove = useCallback(async (id: number) => {
+  const handleApprove = useCallback(async (id: string) => {
     setActionId(id);
     const result = await adminApi.approve(id);
     setActionId(null);
@@ -149,7 +149,7 @@ export default function AdminDashboardPage() {
     await Promise.all([loadStats(), loadPending(pendingPage), loadRecentActive()]);
   }, [pendingUsers, pendingPage, loadStats, loadPending, loadRecentActive, addActivity]);
 
-  const handleReject = useCallback(async (id: number) => {
+  const handleReject = useCallback(async (id: string) => {
     if (typeof window !== "undefined" && !window.confirm("Reject this user's registration?")) return;
     setActionId(id);
     const result = await adminApi.reject(id);

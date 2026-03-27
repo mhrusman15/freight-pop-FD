@@ -68,7 +68,7 @@ export default function ProfileAboutHelpCompanyProfilePage() {
       <div className="fp-container py-5">
         <div className="mx-auto max-w-md bg-white px-4 py-4 text-[20px] leading-tight text-black dark:bg-slate-800 dark:text-slate-100">
           <p>
-            <strong>The Honeywell Platform</strong> Honeywell merges the three
+            <strong>The Freight-pop Platform</strong> Freight-pop merges the three
             pillars of e-commerce acceleration - <strong>Enablement, Intelligence, and
             Demand</strong> - into one all-encompassing platform to drive your
             growth worldwide.
@@ -77,7 +77,7 @@ export default function ProfileAboutHelpCompanyProfilePage() {
             <strong>Streamlined Merchant Experience</strong>
           </p>
           <p>
-            Honeywell makes it simple for merchants to sell worldwide by
+            Freight-pop makes it simple for merchants to sell worldwide by
             managing all aspects of global e-commerce trading for them. We
             cover it all, while you focus on your brand and stay in control.
           </p>
@@ -85,7 +85,7 @@ export default function ProfileAboutHelpCompanyProfilePage() {
             <strong>End-to-end Operations</strong>
           </p>
           <p>
-            Honeywell platform covers all international logistics by leveraging
+            Freight-pop platform covers all international logistics by leveraging
             our robust worldwide ecosystem, including global and local carriers,
             fulfilment services, and PSPs.
           </p>
@@ -120,7 +120,7 @@ export default function ProfileAboutHelpCompanyProfilePage() {
           <p>
             Leverage our exclusive and massive global dataset, to optimise your
             performance in every market. Our data-driven market know-how
-            generated from billions of transactions made through the Honeywell
+            generated from billions of transactions made through the Freight-pop
             platform, enables you to tailor your offering to local preferences
             and global market trends.
           </p>
@@ -128,8 +128,8 @@ export default function ProfileAboutHelpCompanyProfilePage() {
             <strong>Ongoing Analysis to Optimise Your Performance</strong>
           </p>
           <p>
-            Honeywell equips you with industry benchmarks and performance
-            analysis, and recommends ways to improve your results. The Honeywell
+            Freight-pop equips you with industry benchmarks and performance
+            analysis, and recommends ways to improve your results. The Freight-pop
             platform constantly tracks global shopping trends, providing
             merchants with market intelligence to help them make informed
             decisions, boost ecommerce conversions, and accelerate
@@ -139,7 +139,7 @@ export default function ProfileAboutHelpCompanyProfilePage() {
             <strong>Dedicated Guidance to Drive Your Success</strong>
           </p>
           <p>
-            Our team of Honeywell experts provides ongoing consulting and
+            Our team of Freight-pop experts provides ongoing consulting and
             recommendations based on our extensive data and insights to
             accelerate your global online growth. We work closely with you to
             help you reach your business goals and capitalise on new

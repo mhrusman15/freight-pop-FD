@@ -2,12 +2,131 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { getAuthUser } from "@/lib/auth-store";
+import { userApi } from "@/lib/api";
 
 // Rewards / gift logo located at frontend/public/images/gift.png
 const REWARDS_GIFT_IMAGE = "/images/gift.png";
+const MAX_CHECKIN_ROUNDS = 7;
+
+function ordinal(n: number): string {
+  if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
+  if (n % 10 === 1) return `${n}st`;
+  if (n % 10 === 2) return `${n}nd`;
+  if (n % 10 === 3) return `${n}rd`;
+  return `${n}th`;
+}
 
 export default function DailyCheckInPage() {
   const router = useRouter();
+  const authUser = getAuthUser();
+  const storageKey = useMemo(
+    () =>
+      authUser?.id
+        ? `fp_daily_checkin_progress_${authUser.id}`
+        : "fp_daily_checkin_progress_guest",
+    [authUser?.id],
+  );
+  const [claimedRounds, setClaimedRounds] = useState(0);
+  const [lastClaimedGrantAt, setLastClaimedGrantAt] = useState<string | null>(null);
+  const [baselineGrantAt, setBaselineGrantAt] = useState<string | null>(null);
+  const [pendingGrantAt, setPendingGrantAt] = useState<string | null>(null);
+  const [showRewardModal, setShowRewardModal] = useState(false);
+  const [showCheckInFailed, setShowCheckInFailed] = useState(false);
+  const [failedMessage, setFailedMessage] = useState("Need to complete 1st round of task to sign in");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        claimedRounds?: number;
+        lastClaimedGrantAt?: string | null;
+        baselineGrantAt?: string | null;
+      };
+      setClaimedRounds(Math.max(0, Math.min(MAX_CHECKIN_ROUNDS, Number(parsed.claimedRounds || 0))));
+      setLastClaimedGrantAt(parsed.lastClaimedGrantAt || null);
+      setBaselineGrantAt(parsed.baselineGrantAt || null);
+    } catch {
+      // Ignore invalid storage payloads.
+    }
+  }, [storageKey]);
+
+  const persistProgress = (
+    nextClaimedRounds: number,
+    nextLastClaimedGrantAt: string | null,
+    nextBaselineGrantAt: string | null,
+  ) => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          claimedRounds: nextClaimedRounds,
+          lastClaimedGrantAt: nextLastClaimedGrantAt,
+          baselineGrantAt: nextBaselineGrantAt,
+        }),
+      );
+    } catch {
+      // Ignore storage write issues.
+    }
+  };
+
+  const showNextRoundError = (nextRound: number) => {
+    const cappedRound = Math.max(1, Math.min(MAX_CHECKIN_ROUNDS, nextRound));
+    setFailedMessage(`Need to complete ${ordinal(cappedRound)} round of task to sign`);
+    setShowCheckInFailed(true);
+  };
+
+  const handleCheckInClick = () => {
+    userApi.getTaskStatus().then((res) => {
+      const status = res.data;
+      const grantAt = status?.taskAssignmentGrantedAt ?? null;
+      // For new users, treat current assignment as baseline so reward does not show immediately.
+      if (!baselineGrantAt && claimedRounds === 0 && grantAt) {
+        setBaselineGrantAt(grantAt);
+        persistProgress(claimedRounds, lastClaimedGrantAt, grantAt);
+      }
+
+      const firstClaimBaseline = baselineGrantAt || grantAt;
+      const canClaimForCurrentAssignment =
+        Boolean(grantAt) &&
+        grantAt !== (claimedRounds === 0 ? firstClaimBaseline : lastClaimedGrantAt) &&
+        Number(status?.quotaUsed ?? 0) === 0 &&
+        Number(status?.remaining ?? 0) > 0 &&
+        !Boolean(status?.requiresAdminAssignment) &&
+        claimedRounds < MAX_CHECKIN_ROUNDS;
+
+      if (canClaimForCurrentAssignment) {
+        setPendingGrantAt(grantAt);
+        setShowRewardModal(true);
+        return;
+      }
+
+      const requiredRound = Math.min(claimedRounds + 1, MAX_CHECKIN_ROUNDS);
+      showNextRoundError(requiredRound);
+    }).catch(() => {
+      const requiredRound = Math.min(claimedRounds + 1, MAX_CHECKIN_ROUNDS);
+      showNextRoundError(requiredRound);
+    });
+  };
+
+  const handleRewardConfirm = () => {
+    const nextClaimed = Math.min(MAX_CHECKIN_ROUNDS, claimedRounds + 1);
+    const nextLastGrant = pendingGrantAt;
+    setClaimedRounds(nextClaimed);
+    setLastClaimedGrantAt(nextLastGrant);
+    const nextBaseline = baselineGrantAt || nextLastGrant;
+    setBaselineGrantAt(nextBaseline);
+    persistProgress(nextClaimed, nextLastGrant, nextBaseline);
+    setShowRewardModal(false);
+
+    const nextRequiredRound = Math.min(nextClaimed + 1, MAX_CHECKIN_ROUNDS);
+    showNextRoundError(nextRequiredRound);
+  };
+
   return (
     <main className="min-h-screen bg-slate-100 text-slate-900">
       <div className="flex flex-col min-h-screen">
@@ -68,6 +187,7 @@ export default function DailyCheckInPage() {
               </div>
               <button
                 type="button"
+                onClick={handleCheckInClick}
                 className="shrink-0 rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white shadow-md hover:bg-blue-700 transition-colors"
               >
                 Check-in
@@ -203,6 +323,86 @@ export default function DailyCheckInPage() {
             </li>
           </ul>
         </section>
+
+        {showRewardModal ? (
+          <div className="fixed inset-0 z-50 px-4" role="dialog" aria-modal="true">
+            <button
+              type="button"
+              aria-label="Close modal"
+              onClick={() => setShowRewardModal(false)}
+              className="absolute inset-0 bg-black/40"
+            />
+            <div className="relative z-10 flex min-h-full items-center justify-center">
+              <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                <div className="border-b border-slate-200 px-4 py-3 text-center">
+                  <h2 className="text-3xl font-semibold text-slate-900">System message</h2>
+                </div>
+                <div className="space-y-5 p-8 text-center">
+                  <p className="text-4xl font-semibold text-slate-900">
+                    Signed in Rewards <span className="text-red-600">৳1000</span>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleRewardConfirm}
+                    className="w-full rounded-md bg-sky-600 py-3 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showCheckInFailed ? (
+          <div className="fixed inset-0 z-50 px-4" role="dialog" aria-modal="true">
+            <button
+              type="button"
+              aria-label="Close modal"
+              onClick={() => setShowCheckInFailed(false)}
+              className="absolute inset-0 bg-black/40"
+            />
+            <div className="relative z-10 flex min-h-full items-center justify-center">
+              <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                  <h2 className="mx-auto text-3xl font-semibold text-slate-900">Daily Check-In</h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowCheckInFailed(false)}
+                    className="absolute right-4 h-8 w-8 rounded-full text-slate-500 hover:bg-slate-100"
+                    aria-label="Close failed popup"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="space-y-5 p-8 text-center">
+                  <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-rose-500">
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-9 w-9 text-white"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                    >
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-4xl font-semibold text-slate-900">Failed</p>
+                    <p className="text-base text-slate-600">{failedMessage}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowCheckInFailed(false)}
+                    className="w-full rounded-md bg-sky-600 py-3 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </main>
   );

@@ -73,7 +73,7 @@ export default function ProfileAboutHelpAboutUsPage() {
             <strong>greater visibility, traceability, and efficiency</strong>.
           </p>
           <p>
-            <strong>Honeywell</strong> simplifies the complexities of supply
+            <strong>Freight-pop</strong> simplifies the complexities of supply
             chain operations, bridging the gap between physical processes and{" "}
             <strong>digital intelligence</strong> to help companies deliver with{" "}
             <strong>confidence</strong> and accuracy. From production lines to
@@ -82,11 +82,11 @@ export default function ProfileAboutHelpAboutUsPage() {
           </p>
           <p>
             The trusted partner of enterprises across Europe and beyond,
-            Honeywell sets the standard in <strong>supply chain digitization</strong>{" "}
+            Freight-pop sets the standard in <strong>supply chain digitization</strong>{" "}
             and operational excellence.
           </p>
           <p>
-            <strong>Smart Supply Chains are Powered by Honeywell.</strong>
+            <strong>Smart Supply Chains are Powered by Freight-pop.</strong>
           </p>
           <p>
             <strong>Customer Obsessed</strong>
@@ -95,7 +95,7 @@ export default function ProfileAboutHelpAboutUsPage() {
             <strong>Our partners' performance is our purpose:</strong>
           </p>
           <p>
-            At Honeywell, we work closely with our clients to understand their{" "}
+            At Freight-pop, we work closely with our clients to understand their{" "}
             <strong>specific challenges</strong>, adapting our solutions to suit
             each operation. We are committed to enhancing their supply chains,
             enabling <strong>real-time visibility, regulatory compliance, and
@@ -121,7 +121,7 @@ export default function ProfileAboutHelpAboutUsPage() {
             <strong>Our people make it happen:</strong>
           </p>
           <p>
-            Honeywell unites talent from across <strong>Europe</strong>,
+            Freight-pop unites talent from across <strong>Europe</strong>,
             bringing together a <strong>diverse group of professionals</strong>{" "}
             who are passionate about <strong>problem-solving and performance</strong>.
             Our culture fosters <strong>collaboration, creativity, and
@@ -149,7 +149,7 @@ export default function ProfileAboutHelpAboutUsPage() {
             <strong>Investing in the places we live and work:</strong>
           </p>
           <p>
-            Honeywell supports local communities through{" "}
+            Freight-pop supports local communities through{" "}
             <strong>active partnerships, volunteering</strong>, and inclusive
             hiring practices. We collaborate with{" "}
             <strong>educational and nonprofit organizations</strong>, helping to{" "}

@@ -23,7 +23,7 @@ const SCOPED_KEYS: Record<AuthScope, { token: string; refresh: string; user: str
 };
 
 export interface AuthUser {
-  id: number;
+  id: string;
   full_name: string;
   email: string;
   phone: string;

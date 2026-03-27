@@ -1,8 +1,8 @@
-import jwt from "jsonwebtoken";
-import { config } from "../config.js";
+import { supabaseAuth } from "../lib/supabaseClient.js";
+import { assertSupabaseAuthConfig } from "../config.js";
 import { User } from "../models/User.js";
 
-export function authMiddleware(req, res, next) {
+export async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
@@ -11,16 +11,35 @@ export function authMiddleware(req, res, next) {
   }
 
   try {
-    const decoded = jwt.verify(token, config.jwtSecret);
-    req.userId = decoded.userId;
-    req.role = decoded.role;
-
-    // If admin has invalidated this user's sessions (e.g. after balance change),
-    // treat token as expired so the client logs out on next request.
-    if (User.isSessionInvalidated(req.userId)) {
+    assertSupabaseAuthConfig();
+    const { data: authData, error: authErr } = await supabaseAuth.auth.getUser(token);
+    if (authErr || !authData?.user) {
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
+    if (await User.isSessionBlocked(authData.user.id)) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    const profile = await User.findById(authData.user.id);
+    if (!profile) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+    if (profile.role === "user" && profile.status === "pending") {
+      return res.status(403).json({
+        error: "Your account is pending admin approval",
+        code: "PENDING_APPROVAL",
+      });
+    }
+    if (profile.role === "user" && profile.status === "rejected") {
+      return res.status(403).json({
+        error: "Your account was not approved by the admin.",
+        code: "REJECTED",
+      });
+    }
+
+    req.userId = authData.user.id;
+    req.role = profile.role;
     next();
   } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
@@ -28,8 +47,6 @@ export function authMiddleware(req, res, next) {
 }
 
 export function adminOnly(req, res, next) {
-  // Allow both "admin" and "super_admin" roles to access admin-only routes.
-  // The frontend treats both as admins via `isAdmin`, so the backend should align.
   if (req.role !== "admin" && req.role !== "super_admin") {
     return res.status(403).json({ error: "Admin access required" });
   }
@@ -69,7 +86,17 @@ export async function attachUser(req, res, next) {
   if (!req.userId) return next();
   try {
     const user = await User.findById(req.userId);
-    req.user = user ? { id: user.id, full_name: user.full_name, email: user.email, phone: user.phone, role: user.role, admin_permissions: user.admin_permissions || null } : null;
+    req.user = user
+      ? {
+          id: user.id,
+          full_name: user.full_name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+          status: user.status,
+          admin_permissions: user.admin_permissions || null,
+        }
+      : null;
   } catch {
     req.user = null;
   }

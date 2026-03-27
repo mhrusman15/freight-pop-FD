@@ -135,8 +135,8 @@ export interface AuthErrorBody {
 }
 
 export const authApi = {
-  register(body: { fullName: string; email: string; phone: string; password: string }) {
-    return api<{ user: { id: number; full_name: string; email: string; phone: string; status: string }; message: string }>(
+  register(body: { phone: string; password: string; confirmPassword: string; invitationCode: string }) {
+    return api<{ user: { id: string; full_name: string; email: string; phone: string; status: string }; message: string }>(
       "/api/auth/register",
       { method: "POST", body: JSON.stringify(body) }
     );
@@ -144,18 +144,18 @@ export const authApi = {
   registerAdmin(body: { fullName: string; email: string; phone: string; password: string; permissions: string }) {
     return api<{
       message: string;
-      admin: { id: number; full_name: string; email: string; phone: string; status: string; role: string; admin_permissions?: string | null };
+      admin: { id: string; full_name: string; email: string; phone: string; status: string; role: string; admin_permissions?: string | null };
     }>("/api/auth/register-admin", { method: "POST", body: JSON.stringify(body) });
   },
   login(body: { email: string; password: string }) {
     return api<{
       token: string;
       refreshToken?: string;
-      user: { id: number; full_name: string; email: string; phone: string; role: string; admin_permissions?: string | null };
+      user: { id: string; full_name: string; email: string; phone: string; role: string; admin_permissions?: string | null };
     }>("/api/auth/login", { method: "POST", body: JSON.stringify(body) });
   },
   me(token: string | null) {
-    return api<{ user: { id: number; full_name: string; email: string; phone: string; role: string; admin_permissions?: string | null } }>(
+    return api<{ user: { id: string; full_name: string; email: string; phone: string; role: string; admin_permissions?: string | null } }>(
       "/api/auth/me",
       { token }
     );
@@ -175,7 +175,7 @@ export const authApi = {
 };
 
 export type AdminUserRow = {
-  id: number;
+  id: string;
   full_name: string;
   email: string;
   phone: string;
@@ -191,7 +191,7 @@ export type AdminUserRow = {
 };
 
 export type AdminAdminRow = {
-  id: number;
+  id: string;
   full_name: string;
   email: string;
   phone: string;
@@ -236,7 +236,7 @@ export const adminApi = {
       body: JSON.stringify(body),
     });
   },
-  updateAdmin(id: number, body: { role?: "admin" | "super_admin"; permissions?: string }) {
+  updateAdmin(id: string, body: { role?: "admin" | "super_admin"; permissions?: string }) {
     return api<{ admin: AdminAdminRow }>(`/api/admin/admins/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -255,33 +255,38 @@ export const adminApi = {
       totalPages: number;
     }>(`/api/admin/pending${query ? `?${query}` : ""}`);
   },
-  approve(id: number) {
+  approve(id: string) {
     return api<{ user: unknown; message: string }>(`/api/admin/users/${id}/approve`, { method: "PATCH" });
   },
-  reject(id: number) {
+  reject(id: string) {
     return api<{ user: unknown; message: string }>(`/api/admin/users/${id}/reject`, { method: "PATCH" });
   },
-  updateUserBalance(id: number, value: number) {
-    return api<{ balance: number; userId: number }>(`/api/admin/users/${id}/balance`, {
+  updateUserBalance(id: string, value: number) {
+    return api<{ balance: number; userId: string }>(`/api/admin/users/${id}/balance`, {
       method: "PATCH",
       body: JSON.stringify({ value }),
     });
   },
-  assignUserTasks(id: number) {
+  deleteUser(id: string) {
+    return api<{ message: string; user: { id: string; full_name: string; email: string } }>(`/api/admin/users/${id}`, {
+      method: "DELETE",
+    });
+  },
+  assignUserTasks(id: string) {
     return api<{ message: string; status: UserTaskStatus }>(`/api/admin/users/${id}/tasks/assign`, {
       method: "PATCH",
     });
   },
-  assignPrimeOrders(id: number, slots: number[]) {
-    return api<{ message: string; userId: number; slots: number[] }>(`/api/admin/users/${id}/tasks/prime`, {
+  assignPrimeOrders(id: string, slots: number[], opts?: { noNegative?: boolean; negativeAmount?: number }) {
+    return api<{ message: string; userId: string; slots: number[] }>(`/api/admin/users/${id}/tasks/prime`, {
       method: "PATCH",
-      body: JSON.stringify({ slots }),
+      body: JSON.stringify({ slots, ...(opts ?? {}) }),
     });
   },
 };
 
 export type UserTaskStatus = {
-  userId: number;
+  userId: string;
   quotaTotal: number;
   quotaUsed: number;
   remaining: number;
@@ -290,6 +295,7 @@ export type UserTaskStatus = {
   nextAutoAssignAt: string | null;
   taskAssignmentRequestedAt?: string | null;
   taskAssignmentGrantedAt?: string | null;
+  primeNegativeAmount?: number;
 };
 
 export type UserTaskActivityEntry = {

@@ -82,7 +82,7 @@ export default function ProfileAboutHelpSpinningWheelPage() {
           </p>
           <p>
             If the Spinning Wheel is not clicked and the bonus is missed, don't
-            worry members can contact <strong>Honeywell Support</strong> for
+            worry members can contact <strong>Freight-pop Support</strong> for
             assistance. Our team can help manually apply the Prestige Well X15
             benefit and allow you to continue without the wheel.
           </p>

@@ -1,44 +1,45 @@
-# Freight POP – Auth API (Node.js + PostgreSQL)
+# Freight POP – Auth API (Node.js + Express + Supabase)
 
-Backend for the authentication flow with admin approval. Uses JWT and PostgreSQL.
-
-## Persistence (users visible in admin panel)
-
-**Use PostgreSQL so registered users persist.** If you run without a database (`USE_MEMORY_STORE=1` or empty `DATABASE_URL`), user accounts are stored only in memory and are **lost when the server restarts**. To keep all users and see them in the admin panel, set `DATABASE_URL` and run `npm run db:init` then `npm run db:seed`.
+Backend uses **Supabase** (PostgreSQL + Auth). All app data is stored in your Supabase project—nothing is persisted in local files or in-memory stores.
 
 ## Setup
 
-1. **PostgreSQL**: Create a database (e.g. `freight_pop`).
+1. **Supabase project**: Create a project at [supabase.com](https://supabase.com).
 
-2. **Environment**: Copy `.env.example` to `.env` and set:
-   - `DATABASE_URL` – e.g. `postgresql://postgres:postgres@localhost:5432/freight_pop` (required for persistent users)
-   - `JWT_SECRET` – strong secret for signing JWTs
-   - `ADMIN_EMAIL` / `ADMIN_PASSWORD` – used by `npm run db:seed` to create the first admin
+2. **Schema**: In the SQL Editor, run `supabase/migrations/001_initial.sql` (or use `supabase db push` with the CLI).
 
-3. **Install and init DB**:
+3. **Environment**: Copy `.env.example` to `.env` and set:
+   - `SUPABASE_URL` – Project URL
+   - `SUPABASE_SERVICE_ROLE_KEY` – service role key (server only; never expose to the browser)
+   - `ADMIN_EMAIL` / `ADMIN_PASSWORD` – used by `npm run db:seed` for the first super admin
+
+4. **Install and seed**:
    ```bash
    npm install
-   npm run db:init
    npm run db:seed
    ```
 
-4. **Run the API**:
+5. **Run the API**:
    ```bash
    npm run dev
    ```
    API runs at `http://localhost:4000` by default.
 
+## Auth
+
+- **Register / login** use Supabase Auth (`signInWithPassword`, etc.). The API returns Supabase `access_token` and `refresh_token` as `token` and `refreshToken` for the existing frontend.
+- **Profiles** live in `public.users` (role, approval, balance, task fields).
+
 ## Endpoints
 
-- `POST /api/auth/register` – Register (status = pending). Duplicate email returns 409.
-- `POST /api/auth/login` – Login (returns JWT; only approved users succeed)
-- `GET /api/auth/me` – Current user (Bearer token required)
-- `POST /api/auth/change-password` – Change password (Bearer token; body: `oldPassword`, `newPassword`)
-- `GET /api/admin/pending?page=1&limit=10` – Pending users (admin, paginated)
-- `GET /api/admin/users?status=approved|pending|rejected&page=1&limit=10` – Users list (admin)
-- `PATCH /api/admin/users/:id/approve` – Approve user (admin)
-- `PATCH /api/admin/users/:id/reject` – Reject user (admin; user is not deleted)
+- `POST /api/auth/register` – Register (pending approval). Duplicate email returns 409.
+- `POST /api/auth/login` – Login (returns Supabase tokens; only approved users succeed)
+- `POST /api/auth/logout` – Invalidate server-side session (Bearer token)
+- `POST /api/auth/refresh` – Refresh access token
+- `GET /api/auth/me` – Current user (Bearer token)
+- `POST /api/auth/change-password` – Change password (Bearer; body: `oldPassword`, `newPassword`)
+- Admin routes under `/api/admin/*` – require admin JWT + permissions as before
 
 ## Frontend
 
-Set `NEXT_PUBLIC_API_URL=http://localhost:4000` in the frontend `.env.local` and run the Next.js app. Admin login uses the same JWT; create the admin with `npm run db:seed` then log in with that email/password.
+Set `NEXT_PUBLIC_API_URL=http://localhost:4000` in the frontend `.env.local`. Seed the admin with `npm run db:seed`, then log in with that email/password.

@@ -13,6 +13,7 @@ router.post("/register-admin", registerLimit, authController.registerAdmin);
 router.post("/login", loginLimit, authController.login);
 router.post("/refresh", refreshLimit, authController.refresh);
 router.get("/me", authMiddleware, attachUser, authController.me);
+router.post("/logout", authMiddleware, authController.logout);
 router.post("/change-password", authMiddleware, attachUser, authController.changePassword);
 router.post("/forgot-password", authController.forgotPassword);
 

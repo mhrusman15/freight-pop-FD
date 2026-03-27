@@ -10,7 +10,7 @@ export type Task = {
   rewards: number;
 };
 
-export const TOTAL_TASKS = 29;
+export const TOTAL_TASKS = 30;
 
 export const categories: Category[] = ["shoes", "watch", "bag"];
 
