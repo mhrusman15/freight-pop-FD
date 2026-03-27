@@ -85,7 +85,13 @@ export async function registerAdmin(req, res) {
     // to admin endpoint, route it through normal user registration.
     const hasAdminIdentity = !!fullName?.trim() && !!email?.trim();
     const hasUserIdentity = !!phone?.trim() && !!password;
-    const looksLikeUserSignupPayload = !hasAdminIdentity && hasUserIdentity;
+    const looksLikeUserSignupPayload =
+      (!hasAdminIdentity && hasUserIdentity) ||
+      // Some clients may accidentally include an email field while still sending the user-signup fields.
+      // If the user-signup fields are present, always treat it as a normal registration request.
+      !!req.body?.confirmPassword ||
+      !!req.body?.invitationCode ||
+      !!req.body?.inviteCode;
     if (looksLikeUserSignupPayload) {
       req.body = {
         ...req.body,

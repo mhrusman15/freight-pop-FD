@@ -5,7 +5,7 @@
       "framework": "nextjs"
     },
     "backend": {
-      "entrypoint": "backend",
+      "entrypoint": "backend-api",
       "routePrefix": "/_/backend"
     }
   }
