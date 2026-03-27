@@ -100,6 +100,16 @@ export async function api<T>(
     } catch {
       data = null;
     }
+    // If server claims JSON but sends invalid/empty body, treat as error.
+    if (data == null) {
+      return {
+        error:
+          "Server returned an invalid/empty JSON response. " +
+          'This usually means the backend route is not being reached (check "/_/backend/health" on Vercel) ' +
+          "or the function crashed before responding.",
+        status: res.status,
+      };
+    }
   } else {
     // When the API base is misconfigured (or Vercel routePrefix isn't active),
     // fetch can return a 200 HTML page from Next.js instead of JSON from the backend.
