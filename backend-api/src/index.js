@@ -29,4 +29,9 @@ function start() {
   });
 }
 
-start();
+// Local runtime entrypoint (do not start a listener in Vercel serverless runtime).
+if (!process.env.VERCEL) {
+  start();
+}
+
+export default app;

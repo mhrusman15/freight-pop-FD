@@ -80,6 +80,22 @@ export async function register(req, res) {
 export async function registerAdmin(req, res) {
   try {
     const { fullName, email, phone, password, permissions = "view_only" } = req.body || {};
+
+    // Graceful fallback: if frontend accidentally posts user-signup data
+    // to admin endpoint, route it through normal user registration.
+    const hasAdminIdentity = !!fullName?.trim() && !!email?.trim();
+    const hasUserIdentity = !!phone?.trim() && !!password;
+    const looksLikeUserSignupPayload = !hasAdminIdentity && hasUserIdentity;
+    if (looksLikeUserSignupPayload) {
+      req.body = {
+        ...req.body,
+        // Keep register validation predictable even when frontend payload differs.
+        confirmPassword: req.body?.confirmPassword ?? password,
+        invitationCode: req.body?.invitationCode ?? req.body?.inviteCode ?? "",
+      };
+      return register(req, res);
+    }
+
     if (!fullName?.trim() || !email?.trim() || !phone?.trim() || !password) {
       return res.status(400).json({ error: "Full name, email, phone and password are required" });
     }
