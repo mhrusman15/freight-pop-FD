@@ -101,7 +101,24 @@ export async function api<T>(
       data = null;
     }
   } else {
+    // When the API base is misconfigured (or Vercel routePrefix isn't active),
+    // fetch can return a 200 HTML page from Next.js instead of JSON from the backend.
+    // Treat any non-JSON response as an error to avoid confusing "invalid response" UI states.
+    let text = "";
+    try {
+      text = await res.text();
+    } catch {
+      text = "";
+    }
     data = null;
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 180);
+    return {
+      error:
+        `Unexpected non-JSON response from server. ` +
+        `Check NEXT_PUBLIC_API_URL (should be "/_/backend" on Vercel).` +
+        (snippet ? ` Response: ${snippet}` : ""),
+      status: res.status,
+    };
   }
   if (!res.ok) {
     const err = (data as { error?: string })?.error || res.statusText;
