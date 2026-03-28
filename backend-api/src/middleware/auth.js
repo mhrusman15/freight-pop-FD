@@ -53,6 +53,14 @@ export function adminOnly(req, res, next) {
   next();
 }
 
+/** User app API — reject admin/super_admin tokens (separate admin session). */
+export function userOnly(req, res, next) {
+  if (req.role !== "user") {
+    return res.status(403).json({ error: "User access required" });
+  }
+  next();
+}
+
 export function superAdminOnly(req, res, next) {
   if (req.role !== "super_admin") {
     return res.status(403).json({ error: "Super admin access required" });

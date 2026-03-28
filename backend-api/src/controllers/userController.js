@@ -19,7 +19,10 @@ export async function deposit(req, res) {
     return res.status(400).json({ error: "Invalid amount" });
   }
   try {
-    const newBalance = await User.addToBalance(req.userId, amount, { recordDeposit: true });
+    const newBalance = await User.addToBalance(req.userId, amount, {
+      recordDeposit: true,
+      enableX5Profit: true,
+    });
     if (newBalance == null) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -56,6 +59,13 @@ export async function completeTask(req, res) {
         status: status.status,
       });
     }
+    if (status.code === "INSUFFICIENT_BALANCE") {
+      return res.status(403).json({
+        error: status.error || "Your balance is insufficient please recharge",
+        code: "INSUFFICIENT_BALANCE",
+        status: status.status,
+      });
+    }
     if (status.code === "NOT_FOUND") {
       return res.status(404).json({ error: "User not found", code: "NOT_FOUND" });
     }
@@ -82,6 +92,13 @@ export async function openTask(req, res) {
       return res.status(403).json({
         ...result,
         error: "No tasks available. Check your activity track",
+      });
+    }
+    if (result.code === "INSUFFICIENT_BALANCE") {
+      return res.status(403).json({
+        error: result.error || "Your balance is insufficient please recharge",
+        code: "INSUFFICIENT_BALANCE",
+        status: result.status,
       });
     }
     if (result.code === "PRIME_ORDER_PENDING") {

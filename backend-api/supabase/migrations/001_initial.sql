@@ -121,6 +121,21 @@ create table if not exists public.transactions (
 create index if not exists idx_transactions_user on public.transactions (user_id);
 
 -- ---------------------------------------------------------------------------
+-- user_report_progress — persist last report progress per user
+-- ---------------------------------------------------------------------------
+create table if not exists public.user_report_progress (
+  user_id uuid primary key references public.users (id) on delete cascade,
+  last_task_no integer not null default 0,
+  last_amount numeric(18, 2) not null default 0,
+  cycle_instant_profit numeric(18, 2) not null default 0,
+  last_order_number text,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_user_report_progress_updated_at
+  on public.user_report_progress (updated_at desc);
+
+-- ---------------------------------------------------------------------------
 -- updated_at
 -- ---------------------------------------------------------------------------
 create or replace function public.set_updated_at()
@@ -135,6 +150,12 @@ $$;
 drop trigger if exists trg_users_updated_at on public.users;
 create trigger trg_users_updated_at
   before update on public.users
+  for each row
+  execute function public.set_updated_at();
+
+drop trigger if exists trg_user_report_progress_updated_at on public.user_report_progress;
+create trigger trg_user_report_progress_updated_at
+  before update on public.user_report_progress
   for each row
   execute function public.set_updated_at();
 
@@ -153,5 +174,6 @@ alter table public.tasks enable row level security;
 alter table public.user_tasks enable row level security;
 alter table public.transactions enable row level security;
 alter table public.activity_logs enable row level security;
+alter table public.user_report_progress enable row level security;
 
 -- Service role bypasses RLS; API uses service role only.

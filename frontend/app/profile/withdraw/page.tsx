@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAssetBalance } from "@/lib/use-asset-balance";
 import { getAssetBalance, subtractFromAssetBalance } from "@/lib/asset-balance-store";
-import { getAuthUser, getToken } from "@/lib/auth-store";
+import { getUserData, getUserToken } from "@/lib/auth-store";
 
 const WITHDRAW_METHODS = ["BANK"] as const;
 
@@ -25,8 +25,8 @@ export default function ProfileWithdrawPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
+    const token = getUserToken();
+    const user = getUserData();
     const isUserSession = !!token && !!user && user.role !== "admin" && user.role !== "super_admin";
     if (!isUserSession) {
       router.replace("/login");
@@ -47,7 +47,7 @@ export default function ProfileWithdrawPage() {
       setSubmitError("Enter a valid amount.");
       return;
     }
-    const token = getToken();
+    const token = getUserToken();
     const current = token ? assetBalance : getAssetBalance();
     if (amount > current) {
       setSubmitError("Insufficient balance.");

@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAssetBalance } from "@/lib/use-asset-balance";
-import { getAuthUser, getToken } from "@/lib/auth-store";
+import { getUserData, getUserToken } from "@/lib/auth-store";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -15,8 +15,8 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
+    const token = getUserToken();
+    const user = getUserData();
     if (!token || !user) {
       router.replace("/login");
       return;

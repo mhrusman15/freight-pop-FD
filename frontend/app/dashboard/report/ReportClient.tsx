@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   TOTAL_TASKS,
@@ -9,9 +9,15 @@ import {
   getTitleFromImageName,
   type Task,
 } from "./data/tasks";
-import { formatAssetBalance, getAssetBalance, setAssetBalance } from "@/lib/asset-balance-store";
-import { userApi, type UserTaskActivityEntry, type UserTaskStatus } from "@/lib/api";
-import { getAuthUser } from "@/lib/auth-store";
+import { getAssetBalance, setAssetBalance } from "@/lib/asset-balance-store";
+import { useAssetBalance } from "@/lib/use-asset-balance";
+import {
+  userApi,
+  type UserOpenTaskResult,
+  type UserTaskActivityEntry,
+  type UserTaskStatus,
+} from "@/lib/api";
+import { getUserData } from "@/lib/auth-store";
 
 type ActivityStatus = "pending" | "completed";
 type ActivityEntry = {
@@ -130,6 +136,34 @@ function currencyRs(n: number): string {
   return `Rs ${withCommas}.${dec}`;
 }
 
+/** Formats a signed currency for prime reserve deltas (negative = admin recharge requirement). */
+function currencyRsSigned(n: number): string {
+  const sign = n < 0 ? "-" : n > 0 ? "+" : "";
+  const core = currencyRs(Math.abs(n)).replace(/^Rs /, "");
+  return sign ? `${sign}Rs ${core}` : `Rs ${core}`;
+}
+
+/** Toast when prime blocks flow; reserve/total only change when a prime negative amount is set on the user. */
+function primeBlockedToastMessage(primeNegativeAmount: number): string {
+  return primeNegativeAmount > 0
+    ? "Insufficient balance, please recharge and try again"
+    : "Your balance is insufficient please recharge";
+}
+
+const INSUFFICIENT_BALANCE_RECHARGE_TOAST = "Your balance is insufficient please recharge";
+
+const ACTIVITY_TRACK_TOAST = "check your acitivty track";
+
+function showRechargeToast(setToast: (m: string) => void) {
+  setToast(INSUFFICIENT_BALANCE_RECHARGE_TOAST);
+  window.setTimeout(() => setToast(""), 2200);
+}
+
+function showActivityTrackToast(setToast: (m: string) => void) {
+  setToast(ACTIVITY_TRACK_TOAST);
+  window.setTimeout(() => setToast(""), 2200);
+}
+
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -167,16 +201,27 @@ function generateOrderNumber(d: Date): string {
 }
 
 export function ReportClient() {
-  const authUser = getAuthUser();
+  const authUser = getUserData();
   const activityHistoryKey = authUser?.id
     ? `fp_activity_history_${authUser.id}`
     : "fp_activity_history_guest";
+  const hidePendingActivityKey = authUser?.id
+    ? `fp_activity_hide_pending_${authUser.id}`
+    : "fp_activity_hide_pending_guest";
+
+  function readHidePendingFromSession(key: string): boolean {
+    if (typeof window === "undefined") return false;
+    try {
+      return sessionStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  }
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
-  // For a new account, report must start from 0 and then sync from server balance.
-  const [totalCapital, setTotalCapital] = useState<number>(0);
+  const { formatted: assetBalanceFormatted, balance: assetBalance, refetch: refetchAssetBalance } =
+    useAssetBalance();
   const [instantProfit, setInstantProfit] = useState(0);
   const [completedInCycle, setCompletedInCycle] = useState(0);
-  const protectedReserve = INITIAL_PROTECTED_RESERVE;
   const [activeTask, setActiveTask] = useState<Task>(() => createRandomTask(1));
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
@@ -194,9 +239,25 @@ export function ReportClient() {
   const [giftRewardTask, setGiftRewardTask] = useState<Task | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [taskStatus, setTaskStatus] = useState<UserTaskStatus | null>(null);
+  const [hasHydratedProgress, setHasHydratedProgress] = useState(false);
   const [adminAssignReceiptDone, setAdminAssignReceiptDone] = useState(false);
   const [lastAssignmentGrantAt, setLastAssignmentGrantAt] = useState<string | null>(null);
   const [waitingForAdminReassign, setWaitingForAdminReassign] = useState(false);
+  /** After first 30-task cycle + gift pick: hide pending rows in Activity Track until admin assigns again. */
+  const [activityPendingHiddenUntilAdmin, setActivityPendingHiddenUntilAdmin] = useState(() =>
+    readHidePendingFromSession(hidePendingActivityKey),
+  );
+
+  const setActivityPendingHiddenUntilAdminPersisted = (next: boolean) => {
+    setActivityPendingHiddenUntilAdmin(next);
+    if (typeof window === "undefined") return;
+    try {
+      if (next) sessionStorage.setItem(hidePendingActivityKey, "1");
+      else sessionStorage.removeItem(hidePendingActivityKey);
+    } catch {
+      // ignore
+    }
+  };
   const [failedMessage, setFailedMessage] = useState("check your activity track");
   const [toastMessage, setToastMessage] = useState("");
   const [isPrimeCongratsOpen, setIsPrimeCongratsOpen] = useState(false);
@@ -206,29 +267,78 @@ export function ReportClient() {
   const total = TOTAL_TASKS;
   const safeIndex = ((currentTaskIndex % total) + total) % total;
 
-  const progressLabel = useMemo(
-    () => `Task ${safeIndex + 1} / ${total}`,
-    [safeIndex, total],
-  );
-  const campaignWallet = useMemo(
-    // Campaign wallet should reflect only actual usable/task balance.
-    () => totalCapital,
-    [totalCapital],
-  );
-  const pendingPrimeEntry = useMemo(
-    () => activityEntries.find((entry) => entry.status === "pending" && Boolean(entry.isPrime)) || null,
-    [activityEntries],
-  );
+  const awaitingAdminOnly =
+    taskStatus != null &&
+    !taskStatus.canPerformTasks &&
+    Boolean(taskStatus.requiresAdminAssignment);
+
+  /** Hide pending-style rows while waiting for admin (incl. after gift) or when post-gift flag is set. */
+  const suppressPendingInActivity =
+    awaitingAdminOnly || activityPendingHiddenUntilAdmin || waitingForAdminReassign;
+
+  const progressLabel = useMemo(() => {
+    if (awaitingAdminOnly) return "Cycle complete — wait for admin";
+    return `Task ${safeIndex + 1} / ${total}`;
+  }, [awaitingAdminOnly, safeIndex, total]);
+  /** Negative account balance (admin runtime): show wallet as zero; block task/activity actions. */
+  const accountBalanceInsufficient = assetBalance < 0;
+
+  const campaignWallet = useMemo(() => {
+    if (accountBalanceInsufficient) return 0;
+    return assetBalance;
+  }, [assetBalance, accountBalanceInsufficient]);
+  const pendingPrimeEntry = useMemo(() => {
+    if (suppressPendingInActivity) return null;
+    return activityEntries.find((entry) => entry.status === "pending" && Boolean(entry.isPrime)) || null;
+  }, [activityEntries, suppressPendingInActivity]);
   const hasPrimeOrderLock = Boolean(pendingPrimeEntry);
   const primeNegativeAmount = Math.max(0, Number(taskStatus?.primeNegativeAmount ?? 0) || 0);
-  const shouldShowPrimeNegative = hasPrimeOrderLock && primeNegativeAmount > 0;
-  const displayedTotalCapital = shouldShowPrimeNegative ? -Math.abs(primeNegativeAmount) : totalCapital;
-  const displayedProtectedReserve = shouldShowPrimeNegative ? 0 : protectedReserve;
-  const displayedCampaignWallet = useMemo(() => {
-    if (!shouldShowPrimeNegative) return campaignWallet;
-    // For prime-negative mode: reserve is moved to 0, keep upper usable amount in campaign wallet.
-    return totalCapital;
-  }, [shouldShowPrimeNegative, campaignWallet, totalCapital]);
+  /** Reserve/total-capital deduction and recharge UX only apply once the user has reached the prime slot (pending prime row in activity). */
+  const primeFinancialsActive = primeNegativeAmount > 0 && hasPrimeOrderLock;
+  const showPrimeRechargeNotice =
+    primeFinancialsActive && assetBalance < primeNegativeAmount;
+  /**
+   * Prime "Continue" is locked while a pending prime order exists and the admin required a recharge
+   * amount that the user's balance has not yet met (matches API PRIME_ORDER_PENDING).
+   */
+  const isPrimeContinueLocked =
+    hasPrimeOrderLock &&
+    primeNegativeAmount > 0 &&
+    assetBalance < primeNegativeAmount;
+
+  /**
+   * Protected reserve and Total Capital show the prime deduction only while the user is on the
+   * assigned prime order (pending prime in activity), not on earlier tasks in the cycle.
+   */
+  const protectedReserveDisplay = useMemo(() => {
+    if (accountBalanceInsufficient) {
+      return { total: 0 };
+    }
+    const base = INITIAL_PROTECTED_RESERVE;
+    if (primeFinancialsActive) {
+      return { total: base - primeNegativeAmount };
+    }
+    return { total: base };
+  }, [accountBalanceInsufficient, primeFinancialsActive, primeNegativeAmount]);
+
+  /**
+   * While prime recharge is required and balance is short, Total Capital shows the combined liability:
+   * -(protected reserve nominal + admin negative amount), e.g. -(20000 + 15000) = -35000.
+   * Once balance meets the requirement, net reserve (reserve − required) is used as before.
+   */
+  const totalCapitalDisplay = useMemo(() => {
+    if (accountBalanceInsufficient) {
+      return { mode: "balance" as const, value: assetBalance };
+    }
+    if (primeFinancialsActive) {
+      const shortfall = assetBalance < primeNegativeAmount;
+      const value = shortfall
+        ? -(INITIAL_PROTECTED_RESERVE + primeNegativeAmount)
+        : INITIAL_PROTECTED_RESERVE - primeNegativeAmount;
+      return { mode: "prime_adjusted" as const, value };
+    }
+    return { mode: "balance" as const, value: assetBalance };
+  }, [accountBalanceInsufficient, primeFinancialsActive, primeNegativeAmount, assetBalance]);
   const currentTitle = getTitleFromImageName(activeTask.image);
   const isAdminAssignedCyclePending =
     Boolean(taskStatus?.taskAssignmentGrantedAt) &&
@@ -246,12 +356,44 @@ export function ReportClient() {
       }
       if (res.data) {
         setTaskStatus(res.data);
+        const noTasksUntilAdmin =
+          !res.data.canPerformTasks && Boolean(res.data.requiresAdminAssignment);
+
+        if (!hasHydratedProgress) {
+          const progress = res.data.reportProgress;
+          const lastTaskNo = Math.max(0, Number(progress?.lastTaskNo ?? 0) || 0);
+          const cycleProfit = Math.max(0, Number(progress?.cycleInstantProfit ?? 0) || 0);
+          const quotaUsed = Math.max(0, Number(res.data.quotaUsed ?? 0) || 0);
+          const firstDone = Math.max(0, Number(res.data.firstTasksCompleted ?? 0) || 0);
+          const inFirstTimeBonus = firstDone < total;
+          const completed = inFirstTimeBonus
+            ? Math.max(lastTaskNo, firstDone)
+            : Math.max(lastTaskNo, quotaUsed);
+          if (noTasksUntilAdmin) {
+            setCurrentTaskIndex(total - 1);
+            setCompletedInCycle(total);
+          } else {
+            const mod = completed % total;
+            setCurrentTaskIndex(mod);
+            setCompletedInCycle(mod);
+          }
+          setInstantProfit(cycleProfit);
+          setHasHydratedProgress(true);
+        }
         const grantedAt = res.data.taskAssignmentGrantedAt ?? null;
         if (grantedAt && grantedAt !== lastAssignmentGrantAt) {
+          const hadPreviousGrant = lastAssignmentGrantAt !== null;
           setLastAssignmentGrantAt(grantedAt);
           setAdminAssignReceiptDone(false);
           setCompletedInCycle(0);
+          setCurrentTaskIndex(0);
           setWaitingForAdminReassign(false);
+          if (hadPreviousGrant) {
+            setActivityPendingHiddenUntilAdminPersisted(false);
+          }
+        }
+        if (res.data.canPerformTasks && !res.data.requiresAdminAssignment) {
+          setActivityPendingHiddenUntilAdminPersisted(false);
         }
       }
       return res;
@@ -301,18 +443,50 @@ export function ReportClient() {
     entries.some((entry) => entry.status === "pending" && Boolean(entry.isPrime));
 
   useEffect(() => {
-    userApi.getBalance().then((res) => {
-      if (res.data?.balance != null && Number.isFinite(Number(res.data.balance))) {
-        const serverBalance = Number(res.data.balance);
-        setAssetBalance(serverBalance);
-        setTotalCapital(serverBalance);
-      }
-    }).catch(() => {
-      // Keep local balance fallback when balance endpoint is temporarily unavailable.
-    });
     void refreshTaskStatus();
     void loadTaskActivity();
   }, []);
+
+  useEffect(() => {
+    setActivityPendingHiddenUntilAdmin(readHidePendingFromSession(hidePendingActivityKey));
+  }, [hidePendingActivityKey]);
+
+  useEffect(() => {
+    if (!taskStatus) return;
+    const needWait =
+      !taskStatus.canPerformTasks && Boolean(taskStatus.requiresAdminAssignment);
+    setWaitingForAdminReassign(needWait);
+  }, [taskStatus]);
+
+  useEffect(() => {
+    if (!accountBalanceInsufficient) return;
+    setIsActivityModalOpen(false);
+    setIsTaskModalOpen(false);
+    setIsSuccessModalOpen(false);
+  }, [accountBalanceInsufficient]);
+
+  const resumeAfterPositiveBalanceRef = useRef({
+    refreshTaskStatus,
+    loadTaskActivity,
+    refetchAssetBalance,
+  });
+  resumeAfterPositiveBalanceRef.current = {
+    refreshTaskStatus,
+    loadTaskActivity,
+    refetchAssetBalance,
+  };
+  const wasBalanceInsufficientRef = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    const prev = wasBalanceInsufficientRef.current;
+    wasBalanceInsufficientRef.current = accountBalanceInsufficient;
+    if (prev !== true || accountBalanceInsufficient) return;
+    const { refreshTaskStatus: r, loadTaskActivity: l, refetchAssetBalance: f } =
+      resumeAfterPositiveBalanceRef.current;
+    void r();
+    void l();
+    void f();
+  }, [accountBalanceInsufficient]);
 
   useEffect(() => {
     if (!pendingPrimeEntry?.id) return;
@@ -324,22 +498,69 @@ export function ReportClient() {
   }, [pendingPrimeEntry?.id, lastPrimeNoticeId]);
 
   const openTaskModal = () => {
+    if (accountBalanceInsufficient) {
+      showRechargeToast(setToastMessage);
+      return;
+    }
     if (isAdminAssignedCyclePending) {
       setFailedMessage("check your acitivty track");
       setIsFailedModalOpen(true);
       return;
     }
+    if (taskStatus && !taskStatus.canPerformTasks) {
+      const shortfall =
+        hasPrimeOrderLock &&
+        primeNegativeAmount > 0 &&
+        assetBalance < primeNegativeAmount &&
+        !taskStatus.requiresAdminAssignment;
+      setFailedMessage(
+        shortfall
+          ? "Insufficient balance for the prime order — recharge before continuing tasks."
+          : "check your activity track",
+      );
+      setIsFailedModalOpen(true);
+      return;
+    }
     userApi.openTask().then((res) => {
+      if (res.data?.code === "INSUFFICIENT_BALANCE") {
+        if (!accountBalanceInsufficient) {
+          void refetchAssetBalance();
+          void refreshTaskStatus();
+          showActivityTrackToast(setToastMessage);
+          return;
+        }
+        void (async () => {
+          await refetchAssetBalance();
+          const b = getAssetBalance();
+          if (Number.isFinite(b) && b >= 0) {
+            void refreshTaskStatus();
+            showActivityTrackToast(setToastMessage);
+          } else {
+            showRechargeToast(setToastMessage);
+          }
+        })();
+        return;
+      }
       if (res.error && res.data?.code === "PRIME_ORDER_PENDING") {
-        void loadTaskActivity().then((entries) => {
+        const body = res.data as UserOpenTaskResult;
+        const run = async () => {
+          let pn = Math.max(0, Number(body.status?.primeNegativeAmount ?? 0) || 0);
+          if (body.status) {
+            setTaskStatus(body.status);
+          } else {
+            const refreshed = await refreshTaskStatus();
+            pn = Math.max(0, Number(refreshed.data?.primeNegativeAmount ?? 0) || 0);
+          }
+          const entries = await loadTaskActivity();
           if (hasPendingPrimeOrder(entries)) {
-            setToastMessage("Insufficient balance, please recharge and try again");
+            setToastMessage(primeBlockedToastMessage(pn));
             window.setTimeout(() => setToastMessage(""), 2200);
           } else {
             setFailedMessage("check your activity track");
             setIsFailedModalOpen(true);
           }
-        });
+        };
+        void run();
         return;
       }
       if (res.error || !res.data || !res.data.task) {
@@ -376,24 +597,43 @@ export function ReportClient() {
   };
 
   const submitTask = () => {
+    if (accountBalanceInsufficient) {
+      showRechargeToast(setToastMessage);
+      return;
+    }
     setIsTaskModalOpen(false);
     setIsSuccessModalOpen(true);
   };
 
   const confirmSuccess = () => {
+    if (accountBalanceInsufficient) {
+      showRechargeToast(setToastMessage);
+      setIsSuccessModalOpen(false);
+      setIsConfirming(false);
+      return;
+    }
     if (isConfirming) return;
     setIsConfirming(true);
     userApi.completeTask(activePendingEntryId || undefined).then((res) => {
       if (res.error) {
+        if ((res.data as { code?: string } | undefined)?.code === "INSUFFICIENT_BALANCE") {
+          showRechargeToast(setToastMessage);
+          setIsSuccessModalOpen(false);
+          setIsConfirming(false);
+          return;
+        }
         if ((res.data as { code?: string } | undefined)?.code === "PRIME_ORDER_PENDING") {
-          void loadTaskActivity().then((entries) => {
-            if (hasPendingPrimeOrder(entries)) {
-              setFailedMessage("check your acitivty task you get prime order");
-              setToastMessage("Insufficient balance, please recharge and try again");
-              window.setTimeout(() => setToastMessage(""), 2200);
-            } else {
-              setFailedMessage("check your activity track");
-            }
+          void refreshTaskStatus().then((r) => {
+            const pn = Math.max(0, Number(r.data?.primeNegativeAmount ?? 0) || 0);
+            void loadTaskActivity().then((entries) => {
+              if (hasPendingPrimeOrder(entries)) {
+                setFailedMessage("check your acitivty task you get prime order");
+                setToastMessage(primeBlockedToastMessage(pn));
+                window.setTimeout(() => setToastMessage(""), 2200);
+              } else {
+                setFailedMessage("check your activity track");
+              }
+            });
           });
         } else {
           setFailedMessage("check your activity track");
@@ -434,13 +674,16 @@ export function ReportClient() {
         );
       });
       setActivePendingEntryId(null);
-      setTotalCapital((c) => {
-        const next = c + activeTask.commission;
+      {
+        const next = getAssetBalance() + activeTask.commission;
         setAssetBalance(next);
-        return next;
-      });
+      }
       setInstantProfit((p) => p + activeTask.commission);
-      setCurrentTaskIndex((i) => (i + 1) % total);
+      setCurrentTaskIndex((i) => {
+        const nextIdx = i + 1;
+        if (nextIdx >= total) return total - 1;
+        return nextIdx;
+      });
       setCompletedInCycle((prev) => {
         const next = prev + 1;
         if (next >= total) {
@@ -465,39 +708,51 @@ export function ReportClient() {
   };
 
   const handleOpenGiftBox = (boxIndex: number) => {
+    if (accountBalanceInsufficient) {
+      showRechargeToast(setToastMessage);
+      return;
+    }
     if (selectedGiftBox !== null) return;
     const reward = createRandomTask(Math.floor(Math.random() * total) + 1);
     setSelectedGiftBox(boxIndex);
     setGiftRewardTask(reward);
+    if (completedInCycle >= total) {
+      setActivityPendingHiddenUntilAdminPersisted(true);
+    }
   };
 
   const closeRewardModal = () => {
+    if (selectedGiftBox !== null) {
+      setActivityPendingHiddenUntilAdminPersisted(true);
+    }
     setIsRewardModalOpen(false);
     setSelectedGiftBox(null);
     setGiftRewardTask(null);
+    void refreshTaskStatus();
+    void loadTaskActivity();
   };
 
   const filteredActivityEntries = useMemo(() => {
-    const pendingEntries = activityEntries.filter((e) => e.status === "pending");
+    const pendingEntriesRaw = activityEntries.filter((e) => e.status === "pending");
+    const pendingEntries = suppressPendingInActivity ? [] : pendingEntriesRaw;
     const completedEntries = activityEntries.filter((e) => e.status === "completed");
-    const pendingPrimeEntry = pendingEntries.find((e) => Boolean(e.isPrime)) || null;
+    const pendingPrimeForList = pendingEntries.find((e) => Boolean(e.isPrime)) || null;
     // Keep completed history compact: 1 notification per fully completed 30-task cycle.
     const completedSummaryNotifications = buildCompletedNotifications(activityEntries, total);
-    const primeOrderNotifications: ActivityEntry[] = pendingPrimeEntry
+    const primeOrderNotifications: ActivityEntry[] = pendingPrimeForList
       ? [
           {
-            id: `prime-order-notice-${pendingPrimeEntry.id}`,
+            id: `prime-order-notice-${pendingPrimeForList.id}`,
             title: "Prime Order Assigned (Action Required • 5x Commission)",
             orderNumber: `Remaining tasks: ${Math.max(0, Number(taskStatus?.remaining ?? 0))}`,
-            quantityRs: pendingPrimeEntry.quantityRs,
-            commissionRs: pendingPrimeEntry.commissionRs,
-            createdAt: pendingPrimeEntry.createdAt,
+            quantityRs: pendingPrimeForList.quantityRs,
+            commissionRs: pendingPrimeForList.commissionRs,
+            createdAt: pendingPrimeForList.createdAt,
             status: "pending",
             isPrime: true,
           },
         ]
       : [];
-    // Always show current pending task notifications in Activity Track.
     const visiblePendingEntries = pendingEntries;
     const allEntries = [
       ...visiblePendingEntries,
@@ -509,16 +764,39 @@ export function ReportClient() {
     if (activityTab === "pending") return [...visiblePendingEntries, ...primeOrderNotifications];
     // Completed tab should show both the per-task completed history and the 30-task cycle summaries.
     return [...completedSummaryNotifications, ...completedEntries];
-  }, [activityEntries, activityTab, taskStatus, isAdminAssignedCyclePending, total]);
+  }, [
+    activityEntries,
+    activityTab,
+    taskStatus,
+    isAdminAssignedCyclePending,
+    total,
+    suppressPendingInActivity,
+  ]);
 
   const handlePendingDispose = (entry: ActivityEntry) => {
-    if (entry.isPrime) {
-      setToastMessage("Insufficient balance, please recharge and try again");
+    if (accountBalanceInsufficient) {
+      showRechargeToast(setToastMessage);
+      return;
+    }
+    if (entry.isPrime && entry.status === "pending" && isPrimeContinueLocked) {
+      setToastMessage(primeBlockedToastMessage(primeNegativeAmount));
       window.setTimeout(() => setToastMessage(""), 2200);
       return;
     }
     userApi.completeTask(entry.id).then((res) => {
       if (res.error) {
+        if ((res.data as { code?: string } | undefined)?.code === "INSUFFICIENT_BALANCE") {
+          showRechargeToast(setToastMessage);
+          return;
+        }
+        if ((res.data as { code?: string } | undefined)?.code === "PRIME_ORDER_PENDING") {
+          void refreshTaskStatus().then((r) => {
+            const pn = Math.max(0, Number(r.data?.primeNegativeAmount ?? 0) || 0);
+            setToastMessage(primeBlockedToastMessage(pn));
+            window.setTimeout(() => setToastMessage(""), 2200);
+          });
+          return;
+        }
         setFailedMessage("check your activity track");
         setIsFailedModalOpen(true);
         return;
@@ -536,6 +814,11 @@ export function ReportClient() {
             : item,
         ),
       );
+      {
+        const next = getAssetBalance() + Math.max(0, Number(entry.commissionRs || 0));
+        setAssetBalance(next);
+      }
+      setInstantProfit((p) => p + Math.max(0, Number(entry.commissionRs || 0)));
       void loadTaskActivity();
     });
   };
@@ -553,9 +836,30 @@ export function ReportClient() {
       <div className="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-4 space-y-4">
         <div className="flex flex-col items-center gap-1">
           <span className="text-xs text-slate-500">Total Capital</span>
-          <span className={`text-xl font-semibold ${shouldShowPrimeNegative ? "text-red-600" : "text-slate-900"}`}>
-            {formatAssetBalance(displayedTotalCapital)}
+          <span
+            className={`text-xl font-semibold ${
+              totalCapitalDisplay.mode === "prime_adjusted" && totalCapitalDisplay.value < 0
+                ? "text-rose-700"
+                : totalCapitalDisplay.mode === "balance" && assetBalance < 0
+                  ? "text-rose-700"
+                  : totalCapitalDisplay.mode === "balance" && assetBalance > 0
+                    ? "text-emerald-700"
+                    : "text-slate-900"
+            }`}
+          >
+            {totalCapitalDisplay.mode === "prime_adjusted"
+              ? totalCapitalDisplay.value < 0
+                ? currencyRsSigned(totalCapitalDisplay.value)
+                : currencyRs(totalCapitalDisplay.value)
+              : assetBalance < 0
+                ? currencyRsSigned(assetBalance)
+                : assetBalanceFormatted}
           </span>
+          {showPrimeRechargeNotice ? (
+            <p className="text-[11px] text-amber-700 max-w-[280px] text-center">
+              Prime order: add balance to reach Rs {primeNegativeAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} to complete this order (order amount may show as negative).
+            </p>
+          ) : null}
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs text-slate-800">
@@ -584,7 +888,13 @@ export function ReportClient() {
               </span>
               Protected Reserve
             </p>
-            <p className="text-sm font-semibold">{currencyRs(displayedProtectedReserve)}</p>
+            <p
+              className={`text-sm font-semibold ${
+                protectedReserveDisplay.total < 0 ? "text-rose-700" : "text-slate-900"
+              }`}
+            >
+              {currencyRs(protectedReserveDisplay.total)}
+            </p>
           </div>
           <div className="space-y-1">
             <p className="flex items-center gap-1.5 font-medium">
@@ -593,7 +903,7 @@ export function ReportClient() {
               </span>
               Campaign Wallet
             </p>
-            <p className="text-sm font-semibold">{currencyRs(displayedCampaignWallet)}</p>
+            <p className="text-sm font-semibold">{currencyRs(campaignWallet)}</p>
           </div>
         </div>
       </div>
@@ -611,13 +921,21 @@ export function ReportClient() {
         <button
           type="button"
           onClick={openTaskModal}
-          className="w-full rounded-md bg-sky-600 py-2.5 text-sm font-semibold text-white shadow hover:bg-sky-700"
+          disabled={
+            (isPrimeContinueLocked && !accountBalanceInsufficient) ||
+            (Boolean(taskStatus && !taskStatus.canPerformTasks) && !accountBalanceInsufficient)
+          }
+          className="w-full rounded-md bg-sky-600 py-2.5 text-sm font-semibold text-white shadow hover:bg-sky-700 disabled:opacity-50 disabled:pointer-events-none"
         >
           Enter Access
         </button>
         <button
           type="button"
           onClick={() => {
+            if (accountBalanceInsufficient) {
+              showRechargeToast(setToastMessage);
+              return;
+            }
             refreshTaskStatus();
             loadTaskActivity();
             setIsActivityModalOpen(true);
@@ -877,19 +1195,37 @@ export function ReportClient() {
               No activity yet.
             </div>
           ) : (
-            filteredActivityEntries.map((e) => (
+            filteredActivityEntries.map((e) => {
+              const primeRowLocked =
+                Boolean(e.isPrime) &&
+                e.status === "pending" &&
+                isPrimeContinueLocked;
+              return (
               <div
                 key={e.id}
-                className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 space-y-4"
+                className={`rounded-2xl border bg-white shadow-sm p-5 space-y-4 ${
+                  primeRowLocked
+                    ? "border-rose-400 ring-1 ring-rose-200"
+                    : "border-slate-200"
+                }`}
               >
                 <div className="space-y-3">
                   <p className="text-right text-sm font-semibold text-slate-800">
                     {e.isPrime ? "Prime Order • x5 commission" : "Brand Vault"}
+                    {primeRowLocked ? (
+                      <span className="ml-2 inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
+                        Locked
+                      </span>
+                    ) : null}
                   </p>
                   <div className="h-px w-full bg-slate-200" />
                 </div>
 
-                <p className="text-lg font-semibold text-slate-900 leading-snug">
+                <p
+                  className={`text-lg font-semibold leading-snug ${
+                    primeRowLocked ? "text-rose-800" : "text-slate-900"
+                  }`}
+                >
                   {e.isPrime ? "Prime Order" : e.title}
                 </p>
 
@@ -900,7 +1236,13 @@ export function ReportClient() {
                   </p>
                   <p>
                     <span className="font-medium">Order quantity</span>:{" "}
-                    {currencyRs(e.quantityRs)}
+                    <span
+                      className={
+                        primeRowLocked && e.quantityRs < 0 ? "font-semibold text-rose-700" : ""
+                      }
+                    >
+                      {currencyRs(e.quantityRs)}
+                    </span>
                   </p>
                   <p>
                     <span className="font-medium">Commission</span>:{" "}
@@ -922,16 +1264,30 @@ export function ReportClient() {
                     <button
                       type="button"
                       onClick={() => handlePendingDispose(e)}
+                      disabled={
+                        e.isPrime &&
+                        e.status === "pending" &&
+                        isPrimeContinueLocked
+                      }
+                      title={
+                        e.isPrime &&
+                        e.status === "pending" &&
+                        isPrimeContinueLocked &&
+                        primeNegativeAmount > 0
+                          ? `Add balance to reach ${currencyRs(primeNegativeAmount)} to unlock Continue`
+                          : undefined
+                      }
                       className={`inline-flex items-center justify-center rounded-full px-12 py-2.5 text-xs font-semibold text-white shadow ${
                         e.isPrime ? "bg-red-600 hover:bg-red-700" : "bg-sky-600 hover:bg-sky-700"
-                      }`}
+                      } disabled:opacity-40 disabled:pointer-events-none disabled:cursor-not-allowed`}
                     >
                       {e.isPrime ? "Continue" : "Dispose"}
                     </button>
                   )}
                 </div>
               </div>
-            ))
+            );
+            })
           )}
         </div>
       </ModalShell>

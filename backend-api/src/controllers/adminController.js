@@ -34,11 +34,27 @@ export async function updateUserBalance(req, res) {
       return res.status(400).json({ error: "Invalid user id" });
     }
     const value = req.body?.value;
+    const negativeRaw = req.body?.negativeRuntime ?? req.body?.negative_runtime;
     const num = Number(value);
+    const negNum = negativeRaw === undefined || negativeRaw === "" ? 0 : Number(negativeRaw);
     if (!Number.isFinite(num) || num < 0) {
       return res.status(400).json({ error: "Invalid balance value" });
     }
-    const newBalance = await User.setBalance(id, num);
+    if (!Number.isFinite(negNum) || negNum < 0) {
+      return res.status(400).json({ error: "Invalid negative runtime amount" });
+    }
+    if (num === 0 && negNum === 0) {
+      return res.status(400).json({ error: "Enter an amount to add and/or a negative runtime amount" });
+    }
+    const newBalance = await User.adminRuntimeBalanceAdjust(
+      id,
+      { positiveAdd: num, negativeRuntime: negNum },
+      {
+        clearPrimeNegative: true,
+        enableX5Profit: true,
+        setAdminDepositBasis: true,
+      }
+    );
     if (newBalance == null) {
       return res.status(404).json({ error: "User not found" });
     }

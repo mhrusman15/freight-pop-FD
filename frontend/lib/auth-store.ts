@@ -1,26 +1,40 @@
- "use client";
+"use client";
 
-type AuthScope = "admin" | "user";
+export type AuthScope = "admin" | "user";
 
-const LEGACY_TOKEN_KEY = "fp_token";
-const LEGACY_REFRESH_KEY = "fp_refresh_token";
-const LEGACY_USER_KEY = "fp_user";
-const LEGACY_LAST_ACTIVE_KEY = "fp_last_active";
+/** Admin session — never mix with user keys */
+const ADMIN = {
+  token: "admin_access_token",
+  refresh: "admin_refresh_token",
+  user: "admin_user",
+  lastActive: "admin_last_active",
+} as const;
 
-const SCOPED_KEYS: Record<AuthScope, { token: string; refresh: string; user: string; lastActive: string }> = {
-  admin: {
-    token: "fp_admin_token",
-    refresh: "fp_admin_refresh_token",
-    user: "fp_admin_user",
-    lastActive: "fp_admin_last_active",
-  },
-  user: {
-    token: "fp_user_token",
-    refresh: "fp_user_refresh_token",
-    user: "fp_user_user",
-    lastActive: "fp_user_last_active",
-  },
-};
+/** User session — never mix with admin keys */
+const USER = {
+  token: "user_access_token",
+  refresh: "user_refresh_token",
+  user: "user_data",
+  lastActive: "user_last_active",
+} as const;
+
+/** Previous keys (migrate once per browser) */
+const LEGACY = {
+  adminToken: "fp_admin_token",
+  adminRefresh: "fp_admin_refresh_token",
+  adminUser: "fp_admin_user",
+  adminLast: "fp_admin_last_active",
+  userToken: "fp_user_token",
+  userRefresh: "fp_user_refresh_token",
+  userUser: "fp_user_user",
+  userLast: "fp_user_last_active",
+  sharedToken: "fp_token",
+  sharedRefresh: "fp_refresh_token",
+  sharedUser: "fp_user",
+  sharedLast: "fp_last_active",
+} as const;
+
+const MIGRATION_FLAG = "fp_auth_v3_migrated";
 
 export interface AuthUser {
   id: string;
@@ -31,135 +45,171 @@ export interface AuthUser {
   admin_permissions?: string | null;
 }
 
+function keysFor(scope: AuthScope) {
+  return scope === "admin" ? ADMIN : USER;
+}
+
 function isAdminRole(role?: string | null): boolean {
   return role === "admin" || role === "super_admin";
 }
 
-function getScopeByPathname(pathname?: string | null): AuthScope {
+/** True when stored user profile is an admin-type account (should not use user portal). */
+export function isElevatedUserProfile(user: AuthUser | null): boolean {
+  return isAdminRole(user?.role);
+}
+
+/** Route → which session this surface uses (not derived from stored user). */
+export function scopeFromPathname(pathname?: string | null): AuthScope {
   const path =
     pathname ?? (typeof window !== "undefined" ? window.location.pathname : "");
   return path.startsWith("/admin") ? "admin" : "user";
 }
 
-function getScope(explicitRole?: string): AuthScope {
-  if (isAdminRole(explicitRole)) return "admin";
-  return getScopeByPathname();
-}
+function migrateLegacyStorageOnce(): void {
+  if (typeof window === "undefined") return;
+  if (window.localStorage.getItem(MIGRATION_FLAG)) return;
 
-function getStoredToken(scope?: AuthScope): string | null {
-  if (typeof window === "undefined") return null;
-  if (scope) {
-    return (
-      window.localStorage.getItem(SCOPED_KEYS[scope].token) ||
-      window.localStorage.getItem(LEGACY_TOKEN_KEY)
-    );
-  }
-  const resolved = getScope();
-  return (
-    window.localStorage.getItem(SCOPED_KEYS[resolved].token) ||
-    window.localStorage.getItem(LEGACY_TOKEN_KEY)
-  );
-}
+  const move = (from: string, to: string) => {
+    const v = window.localStorage.getItem(from);
+    if (v != null && !window.localStorage.getItem(to)) {
+      window.localStorage.setItem(to, v);
+    }
+  };
 
-function getStoredUser(scope?: AuthScope): AuthUser | null {
-  if (typeof window === "undefined") return null;
+  move(LEGACY.adminToken, ADMIN.token);
+  move(LEGACY.adminRefresh, ADMIN.refresh);
+  move(LEGACY.adminUser, ADMIN.user);
+  move(LEGACY.adminLast, ADMIN.lastActive);
+  move(LEGACY.userToken, USER.token);
+  move(LEGACY.userRefresh, USER.refresh);
+  move(LEGACY.userUser, USER.user);
+  move(LEGACY.userLast, USER.lastActive);
+
+  // Shared legacy: split by last known user JSON role if possible
+  const sharedUserRaw = window.localStorage.getItem(LEGACY.sharedUser);
+  let role: string | null = null;
   try {
-    const scopedKey = scope ? SCOPED_KEYS[scope].user : SCOPED_KEYS[getScope()].user;
-    const raw = window.localStorage.getItem(scopedKey) || window.localStorage.getItem(LEGACY_USER_KEY);
+    if (sharedUserRaw) role = (JSON.parse(sharedUserRaw) as AuthUser)?.role ?? null;
+  } catch {
+    role = null;
+  }
+  const sharedTok = window.localStorage.getItem(LEGACY.sharedToken);
+  if (sharedTok && !window.localStorage.getItem(ADMIN.token) && !window.localStorage.getItem(USER.token)) {
+    const scope = isAdminRole(role) ? "admin" : "user";
+    const k = keysFor(scope);
+    window.localStorage.setItem(k.token, sharedTok);
+    const shRef = window.localStorage.getItem(LEGACY.sharedRefresh);
+    const shUser = window.localStorage.getItem(LEGACY.sharedUser);
+    const shLast = window.localStorage.getItem(LEGACY.sharedLast);
+    if (shRef) window.localStorage.setItem(k.refresh, shRef);
+    if (shUser) window.localStorage.setItem(k.user, shUser);
+    if (shLast) window.localStorage.setItem(k.lastActive, shLast);
+  }
+
+  window.localStorage.setItem(MIGRATION_FLAG, "1");
+}
+
+function readToken(scope: AuthScope): string | null {
+  if (typeof window === "undefined") return null;
+  migrateLegacyStorageOnce();
+  return window.localStorage.getItem(keysFor(scope).token);
+}
+
+function readUser(scope: AuthScope): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  migrateLegacyStorageOnce();
+  try {
+    const raw = window.localStorage.getItem(keysFor(scope).user);
     return raw ? (JSON.parse(raw) as AuthUser) : null;
   } catch {
     return null;
   }
 }
 
+export function getAdminToken(): string | null {
+  return readToken("admin");
+}
+
+export function getUserToken(): string | null {
+  return readToken("user");
+}
+
+export function getAdminUser(): AuthUser | null {
+  return readUser("admin");
+}
+
+export function getUserData(): AuthUser | null {
+  return readUser("user");
+}
+
+/** Token for the current URL surface (admin vs user app). */
+export function getToken(): string | null {
+  return readToken(scopeFromPathname());
+}
+
+/** Profile for the current URL surface. */
+export function getAuthUser(): AuthUser | null {
+  return readUser(scopeFromPathname());
+}
+
+/**
+ * Persist session for the given account only — does not touch the other role’s storage.
+ * Scope is taken from `user.role`, not from the current path (login pages live under /login and /admin/login).
+ */
 export function setAuth(token: string, user: AuthUser, refreshToken?: string | null): void {
   if (typeof window === "undefined") return;
-  const scope = getScope(user.role);
-  const keys = SCOPED_KEYS[scope];
-  window.localStorage.setItem(keys.token, token);
-  window.localStorage.setItem(keys.user, JSON.stringify(user));
-  window.localStorage.setItem(keys.lastActive, String(Date.now()));
-
-  // Keep legacy keys for backward compatibility with older reads.
-  window.localStorage.setItem(LEGACY_TOKEN_KEY, token);
-  window.localStorage.setItem(LEGACY_USER_KEY, JSON.stringify(user));
-  window.localStorage.setItem(LEGACY_LAST_ACTIVE_KEY, String(Date.now()));
-
+  const scope: AuthScope = isAdminRole(user.role) ? "admin" : "user";
+  const k = keysFor(scope);
+  window.localStorage.setItem(k.token, token);
+  window.localStorage.setItem(k.user, JSON.stringify(user));
+  window.localStorage.setItem(k.lastActive, String(Date.now()));
   if (refreshToken) {
-    window.localStorage.setItem(keys.refresh, refreshToken);
-    window.localStorage.setItem(LEGACY_REFRESH_KEY, refreshToken);
+    window.localStorage.setItem(k.refresh, refreshToken);
   }
 }
 
-export function clearAuth(scope?: AuthScope): void {
+export function clearAuth(scope: AuthScope): void {
   if (typeof window === "undefined") return;
-  const resolved = scope ?? getScope();
-  const keys = SCOPED_KEYS[resolved];
-  const existingScopedToken = window.localStorage.getItem(keys.token);
+  const k = keysFor(scope);
+  window.localStorage.removeItem(k.token);
+  window.localStorage.removeItem(k.refresh);
+  window.localStorage.removeItem(k.user);
+  window.localStorage.removeItem(k.lastActive);
 
-  window.localStorage.removeItem(keys.token);
-  window.localStorage.removeItem(keys.refresh);
-  window.localStorage.removeItem(keys.user);
-  window.localStorage.removeItem(keys.lastActive);
-
-  // Clear legacy keys only when they represent this same session.
-  const legacyToken = window.localStorage.getItem(LEGACY_TOKEN_KEY);
-  if (legacyToken && legacyToken === existingScopedToken) {
-    window.localStorage.removeItem(LEGACY_TOKEN_KEY);
-    window.localStorage.removeItem(LEGACY_REFRESH_KEY);
-    window.localStorage.removeItem(LEGACY_USER_KEY);
-    window.localStorage.removeItem(LEGACY_LAST_ACTIVE_KEY);
-  }
-
-  // Keep admin and user cookies independent so logging out one role does not drop the other.
-  const cookieName = resolved === "admin" ? "adminAuthToken" : "userAuthToken";
+  const cookieName = scope === "admin" ? "adminAuthToken" : "userAuthToken";
   document.cookie = `${cookieName}=; Max-Age=0; path=/; SameSite=Lax`;
-  document.cookie = `authToken=; Max-Age=0; path=/; SameSite=Lax`;
 }
 
-/** Update access token after silent refresh (keeps refresh + user). */
-export function setAccessToken(token: string, scope?: AuthScope): void {
+/** After refresh — must target the same role as the refresh token. */
+export function setAccessToken(token: string, scope: AuthScope): void {
   if (typeof window === "undefined") return;
-  const resolved = scope ?? getScope();
-  window.localStorage.setItem(SCOPED_KEYS[resolved].token, token);
-  window.localStorage.setItem(LEGACY_TOKEN_KEY, token);
+  window.localStorage.setItem(keysFor(scope).token, token);
 }
 
-export function getRefreshToken(scope?: AuthScope): string | null {
+export function getRefreshToken(scope: AuthScope): string | null {
   if (typeof window === "undefined") return null;
-  const resolved = scope ?? getScope();
-  return (
-    window.localStorage.getItem(SCOPED_KEYS[resolved].refresh) ||
-    window.localStorage.getItem(LEGACY_REFRESH_KEY)
-  );
+  migrateLegacyStorageOnce();
+  return window.localStorage.getItem(keysFor(scope).refresh);
 }
 
-export function getToken(): string | null {
-  return getStoredToken();
-}
-
-export function getAuthUser(): AuthUser | null {
-  return getStoredUser();
-}
-
+/** True if the admin slot has an admin or super_admin profile. */
 export function isAdmin(): boolean {
-  const user = getStoredUser();
+  const user = getAdminUser();
   return user?.role === "admin" || user?.role === "super_admin";
 }
 
 export function isSuperAdmin(): boolean {
-  const user = getStoredUser();
-  return user?.role === "super_admin";
+  return getAdminUser()?.role === "super_admin";
 }
 
 export function getAdminPermission(): string {
-  const user = getStoredUser("admin");
+  const user = getAdminUser();
   if (!user || user.role !== "admin") return "full";
   return user.admin_permissions || "view_only";
 }
 
 export function canAdmin(action: "view" | "approve" | "balance"): boolean {
-  const user = getStoredUser("admin");
+  const user = getAdminUser();
   if (!user) return false;
   if (user.role === "super_admin") return true;
   const perm = user.admin_permissions || "view_only";
@@ -171,22 +221,20 @@ export function canAdmin(action: "view" | "approve" | "balance"): boolean {
 }
 
 export function isAuthenticated(): boolean {
-  return !!getStoredToken();
+  return !!getToken();
 }
 
 export function touchLastActive(scope?: AuthScope): void {
   if (typeof window === "undefined") return;
-  const resolved = scope ?? getScope();
-  window.localStorage.setItem(SCOPED_KEYS[resolved].lastActive, String(Date.now()));
-  window.localStorage.setItem(LEGACY_LAST_ACTIVE_KEY, String(Date.now()));
+  const resolved = scope ?? scopeFromPathname();
+  window.localStorage.setItem(keysFor(resolved).lastActive, String(Date.now()));
 }
 
 export function getLastActive(scope?: AuthScope): number | null {
   if (typeof window === "undefined") return null;
-  const resolved = scope ?? getScope();
-  const raw =
-    window.localStorage.getItem(SCOPED_KEYS[resolved].lastActive) ||
-    window.localStorage.getItem(LEGACY_LAST_ACTIVE_KEY);
+  const resolved = scope ?? scopeFromPathname();
+  migrateLegacyStorageOnce();
+  const raw = window.localStorage.getItem(keysFor(resolved).lastActive);
   if (!raw) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;

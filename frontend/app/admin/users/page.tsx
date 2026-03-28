@@ -1,11 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { adminApi, type AdminUserRow } from "@/lib/api";
 import { canAdmin, getAdminPermission, isSuperAdmin } from "@/lib/auth-store";
 
 const PAGE_SIZE = 10;
 const TASK_ASSIGN_LIMIT = 30;
+
+/** Matches server `User.adminRuntimeBalanceAdjust`: add positive, then optional negative runtime. */
+function computeAdminPreviewBalance(oldBal: number, positiveAdd: number, negativeRuntime: number): number {
+  let b = oldBal + positiveAdd;
+  if (negativeRuntime > 0) {
+    b = -(Math.abs(b) + negativeRuntime);
+  }
+  return b;
+}
+
+function formatRsSignedAmount(n: number): string {
+  if (!Number.isFinite(n)) return "Rs 0.00";
+  return n < 0 ? `−Rs ${Math.abs(n).toFixed(2)}` : `Rs ${n.toFixed(2)}`;
+}
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString("en-US", {
@@ -31,6 +45,7 @@ export default function AdminUsersPage() {
   const [statusFilter, setStatusFilter] = useState<"approved" | "pending" | "rejected">("approved");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
+  const [editingNegativeValue, setEditingNegativeValue] = useState<string>("");
   const [savingId, setSavingId] = useState<string | null>(null);
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -39,8 +54,6 @@ export default function AdminUsersPage() {
   const [primeSlots, setPrimeSlots] = useState<number[]>([]);
   const [savingPrime, setSavingPrime] = useState(false);
   const [primeAssignMode, setPrimeAssignMode] = useState<"prime_only" | "assign_with_prime">("prime_only");
-  const [primeNegativeMode, setPrimeNegativeMode] = useState<"none" | "custom" | null>(null);
-  const [primeNegativeAmount, setPrimeNegativeAmount] = useState<string>("");
 
   const load = useCallback(
     async (pageNum = 1) => {
@@ -78,11 +91,8 @@ export default function AdminUsersPage() {
   const startEdit = (user: AdminUserRow) => {
     if (!canBalance) return;
     setEditingId(user.id);
-    setEditingValue(
-      user.asset_balance != null && Number.isFinite(user.asset_balance)
-        ? String(user.asset_balance)
-        : ""
-    );
+    setEditingValue("");
+    setEditingNegativeValue("");
     setSuccess("");
   };
 
@@ -91,8 +101,6 @@ export default function AdminUsersPage() {
     setPrimeAssignMode("assign_with_prime");
     setPrimeModalUser(user);
     setPrimeSlots([]);
-    setPrimeNegativeMode(null);
-    setPrimeNegativeAmount("");
     setError("");
     setSuccess(
       `Select prime order numbers for ${user.full_name}. If no prime order, select 0 and save.`
@@ -117,22 +125,9 @@ export default function AdminUsersPage() {
       return;
     }
     const normalizedSlots = primeSlots.includes(0) ? [] : primeSlots;
-    if (normalizedSlots.length > 0 && primeNegativeMode === null) {
-      setError("Please choose negative amount option: 'No negative' or 'Set negative amount'.");
-      return;
-    }
     setSavingPrime(true);
     setError("");
     setSuccess("");
-    const noNegative = primeSlots.includes(0) || primeNegativeMode === "none" || normalizedSlots.length === 0;
-    const negativeAmountNum = Math.abs(Number(primeNegativeAmount || 0));
-    if (!noNegative) {
-      if (!Number.isFinite(negativeAmountNum) || negativeAmountNum <= 0) {
-        setSavingPrime(false);
-        setError("Please enter a valid negative amount (greater than 0), or select 'No negative'.");
-        return;
-      }
-    }
     if (primeAssignMode === "assign_with_prime") {
       setAssigningId(primeModalUser.id);
       const assignRes = await adminApi.assignUserTasks(primeModalUser.id);
@@ -145,8 +140,8 @@ export default function AdminUsersPage() {
       setAssigningId(null);
     }
     const res = await adminApi.assignPrimeOrders(primeModalUser.id, normalizedSlots, {
-      noNegative,
-      negativeAmount: noNegative ? 0 : negativeAmountNum,
+      noNegative: true,
+      negativeAmount: 0,
     });
     setSavingPrime(false);
     if (res.error) {
@@ -157,35 +152,51 @@ export default function AdminUsersPage() {
     setPrimeModalUser(null);
     setPrimeSlots([]);
     setPrimeAssignMode("prime_only");
-    setPrimeNegativeMode(null);
-    setPrimeNegativeAmount("");
     load(page);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setEditingValue("");
+    setEditingNegativeValue("");
   };
 
   const handleSaveBalance = async (user: AdminUserRow) => {
     if (!canBalance) return;
-    const num = Number(editingValue);
-    if (!Number.isFinite(num) || num < 0) {
-      setError("Please enter a valid non-negative balance.");
+    const posRaw = editingValue.trim() === "" ? 0 : Number(editingValue);
+    const negRaw = editingNegativeValue.trim() === "" ? 0 : Number(editingNegativeValue);
+    if (!Number.isFinite(posRaw) || posRaw < 0) {
+      setError("Please enter a valid non-negative amount in “Amount to add”, or leave it empty for 0.");
+      return;
+    }
+    if (!Number.isFinite(negRaw) || negRaw < 0) {
+      setError("Please enter a valid non-negative amount in “Negative amount”, or leave it empty for 0.");
+      return;
+    }
+    if (posRaw === 0 && negRaw === 0) {
+      setError("Enter an amount to add and/or a negative runtime amount before saving.");
       return;
     }
     const oldNum = Number(user.asset_balance ?? 0);
-    const oldDisplay = Number.isFinite(oldNum) ? `Rs ${oldNum.toFixed(2)}` : "—";
-    const newDisplay = `Rs ${num.toFixed(2)}`;
+    const safeOld = Number.isFinite(oldNum) ? oldNum : 0;
+    const newBal = computeAdminPreviewBalance(safeOld, posRaw, negRaw);
+    const oldDisplay = formatRsSignedAmount(safeOld);
+    const addDisplay = posRaw > 0 ? `Rs ${posRaw.toFixed(2)}` : "Rs 0.00";
+    const negDisplay = negRaw > 0 ? `Rs ${negRaw.toFixed(2)} (applied as negative total)` : "—";
+    const totalDisplay = formatRsSignedAmount(newBal);
+    const sumLine =
+      posRaw > 0 && negRaw === 0
+        ? `\nSum (current + add): ${oldDisplay} + ${addDisplay} = ${totalDisplay}`
+        : "";
     if (typeof window !== "undefined") {
       const confirmed = window.confirm(
-        `Change asset balance for ${user.full_name} (${user.email}) from ${oldDisplay} to ${newDisplay}?`
+        `Update balance for ${user.full_name} (${user.email})?\nCurrent: ${oldDisplay}\nAmount to add: ${addDisplay}\nNegative runtime: ${negDisplay}\nNew total: ${totalDisplay}${sumLine}`
       );
       if (!confirmed) return;
     }
     setSavingId(user.id);
     setError("");
-    const res = await adminApi.updateUserBalance(user.id, num);
+    const res = await adminApi.updateUserBalance(user.id, posRaw, negRaw);
     setSavingId(null);
     if (res.error) {
       setError(res.error);
@@ -193,6 +204,7 @@ export default function AdminUsersPage() {
     }
     setEditingId(null);
     setEditingValue("");
+    setEditingNegativeValue("");
     load(page);
   };
 
@@ -216,6 +228,7 @@ export default function AdminUsersPage() {
     if (editingId === user.id) {
       setEditingId(null);
       setEditingValue("");
+      setEditingNegativeValue("");
     }
     setSuccess(`User ${user.full_name} deleted successfully.`);
     load(1);
@@ -291,24 +304,87 @@ export default function AdminUsersPage() {
           {(() => {
             const u = users.find((x) => x.id === editingId);
             const prevNum = u?.asset_balance != null ? Number(u.asset_balance) : NaN;
-            const prevDisplay =
-              Number.isFinite(prevNum) ? `Rs ${prevNum.toFixed(2)}` : "Not set";
-            const nextNum = Number(editingValue);
-            const nextDisplay =
-              Number.isFinite(nextNum) && nextNum >= 0
-                ? `Rs ${nextNum.toFixed(2)}`
-                : "—";
+            const safePrev = Number.isFinite(prevNum) ? prevNum : 0;
+            const prevDisplay = Number.isFinite(prevNum)
+              ? `${prevNum < 0 ? "-" : ""}Rs ${Math.abs(prevNum).toFixed(2)}`
+              : "Rs 0.00";
+            const posNum = editingValue.trim() === "" ? 0 : Number(editingValue);
+            const negNum = editingNegativeValue.trim() === "" ? 0 : Number(editingNegativeValue);
+            const posOk = Number.isFinite(posNum) && posNum >= 0;
+            const negOk = Number.isFinite(negNum) && negNum >= 0;
+            const addDisplay = posOk && posNum > 0 ? `Rs ${posNum.toFixed(2)}` : posOk ? "Rs 0.00" : "—";
+            const negLine =
+              negOk && negNum > 0 ? (
+                <span className="font-semibold text-rose-700 dark:text-rose-300">
+                  Negative runtime: −Rs {negNum.toFixed(2)}
+                </span>
+              ) : (
+                <span className="font-semibold">Negative runtime:</span>
+              );
+            const negSuffix = negOk && negNum > 0 ? ` (user sees total as negative)` : null;
+            let totalDisplay: ReactNode = "—";
+            let totalNum: number | null = null;
+            if (posOk && negOk) {
+              totalNum = computeAdminPreviewBalance(safePrev, posNum, negNum);
+              totalDisplay =
+                totalNum < 0 ? (
+                  <span className="font-semibold text-rose-700 dark:text-rose-300">
+                    −Rs {Math.abs(totalNum).toFixed(2)}
+                  </span>
+                ) : (
+                  <span className="font-semibold text-emerald-800 dark:text-emerald-200">
+                    Rs {totalNum.toFixed(2)}
+                  </span>
+                );
+            }
+            const sumRow =
+              posOk && negOk && posNum > 0 && negNum === 0 && totalNum !== null ? (
+                <div className="rounded-md border border-emerald-200/80 bg-white/60 px-2 py-1.5 dark:border-emerald-800/50 dark:bg-emerald-950/20">
+                  <span className="font-semibold text-emerald-900 dark:text-emerald-100">Sum: </span>
+                  <span>{prevDisplay}</span>
+                  <span className="mx-1 text-emerald-700 dark:text-emerald-300">+</span>
+                  <span className="text-emerald-800 dark:text-emerald-200">{addDisplay}</span>
+                  <span className="mx-1 text-emerald-700 dark:text-emerald-300">=</span>
+                  {totalNum < 0 ? (
+                    <span className="font-semibold text-rose-700 dark:text-rose-300">
+                      −Rs {Math.abs(totalNum).toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="font-semibold text-emerald-800 dark:text-emerald-200">
+                      Rs {totalNum.toFixed(2)}
+                    </span>
+                  )}
+                  <span className="ml-1 block text-[11px] font-normal text-emerald-800/80 dark:text-emerald-200/80 sm:inline sm:ml-2">
+                    (current balance + amount to add; negative runtime field not used)
+                  </span>
+                </div>
+              ) : null;
             return (
-              <div className="mt-2 text-xs text-emerald-900/90 dark:text-emerald-100/90">
-                <span className="font-semibold">Previous balance:</span> {prevDisplay}{" "}
-                <span className="mx-1 text-emerald-700 dark:text-emerald-300">→</span>
-                <span className="font-semibold">New balance:</span> {nextDisplay}
+              <div className="mt-2 space-y-1 text-xs text-emerald-900/90 dark:text-emerald-100/90">
+                <div>
+                  <span className="font-semibold">Current balance:</span> {prevDisplay}
+                </div>
+                <div>
+                  <span className="mx-1 text-emerald-700 dark:text-emerald-300">→</span>
+                  <span className="font-semibold text-emerald-800 dark:text-emerald-200">Add amount:</span>{" "}
+                  <span className="text-emerald-800 dark:text-emerald-200">{addDisplay}</span>
+                </div>
+                <div>
+                  <span className="mx-1 text-emerald-700 dark:text-emerald-300">→</span>
+                  {negLine}
+                  {negSuffix}
+                </div>
+                {sumRow}
+                <div>
+                  <span className="mx-1 text-emerald-700 dark:text-emerald-300">→</span>
+                  <span className="font-semibold">New total (user account):</span> {totalDisplay}
+                </div>
               </div>
             );
           })()}
           <div className="mt-3 grid gap-3 sm:grid-cols-1">
             <label className="flex flex-col gap-1 text-xs font-medium text-slate-800 dark:text-slate-200">
-              Asset balance (runtime)
+              Amount to add (runtime)
               <input
                 type="number"
                 min={0}
@@ -316,7 +392,23 @@ export default function AdminUsersPage() {
                 value={editingValue}
                 onChange={(e) => setEditingValue(e.target.value)}
                 className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-emerald-700 dark:bg-slate-900 dark:text-slate-50"
-                placeholder="Enter new balance"
+                placeholder="Enter amount to add (positive)"
+              />
+              <span className="text-[11px] font-normal text-slate-600 dark:text-slate-400">
+                Added to the user&apos;s current balance (algebraic sum). If they are negative, this tops them up;
+                the new total shows in green when it is zero or positive.
+              </span>
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-800 dark:text-slate-200">
+              Negative amount (runtime)
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={editingNegativeValue}
+                onChange={(e) => setEditingNegativeValue(e.target.value)}
+                className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-rose-400/70 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 dark:border-rose-800 dark:bg-slate-900 dark:text-slate-50"
+                placeholder="Only if setting debt: −(|balance after add| + this)"
               />
             </label>
           </div>
@@ -351,8 +443,6 @@ export default function AdminUsersPage() {
                 setPrimeModalUser(user);
                 setPrimeSlots([]);
                 setPrimeAssignMode("prime_only");
-                setPrimeNegativeMode(null);
-                setPrimeNegativeAmount("");
               }}
               className="inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-violet-700"
             >
@@ -393,57 +483,6 @@ export default function AdminUsersPage() {
             <p className="mt-1 text-xs text-red-600 dark:text-red-300">
               Prime order blocks task continuation on user side and shows a recharge warning until balance is topped up.
             </p>
-            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
-              <div className="font-semibold text-slate-900 dark:text-slate-100">Prime negative amount (optional)</div>
-              <div className="mt-2 flex flex-col gap-2">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name="primeNegativeMode"
-                    checked={primeNegativeMode === "none"}
-                    onChange={() => setPrimeNegativeMode("none")}
-                    disabled={primeSlots.includes(0)}
-                  />
-                  <span>No negative</span>
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name="primeNegativeMode"
-                    checked={primeNegativeMode === "custom"}
-                    onChange={() => setPrimeNegativeMode("custom")}
-                    disabled={primeSlots.includes(0)}
-                  />
-                  <span>Set negative amount</span>
-                </label>
-                {primeNegativeMode === "custom" && !primeSlots.includes(0) ? (
-                  <div className="mt-1 flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={primeNegativeAmount}
-                      onChange={(e) => setPrimeNegativeAmount(e.target.value)}
-                      className="w-40 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-50"
-                      placeholder="e.g. 1500"
-                    />
-                    <span className="text-xs text-slate-500 dark:text-slate-400">
-                      This will show as negative in Total Capital.
-                    </span>
-                  </div>
-                ) : null}
-                {primeSlots.includes(0) ? (
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Negative amount is disabled when selecting “0 - No prime order”.
-                  </div>
-                ) : null}
-                {!primeSlots.includes(0) && primeNegativeMode === null ? (
-                  <div className="text-xs text-amber-600 dark:text-amber-300">
-                    Select one option before saving: No negative or Set negative amount.
-                  </div>
-                ) : null}
-              </div>
-            </div>
             <div className="mt-3">
               <button
                 type="button"
@@ -567,37 +606,68 @@ export default function AdminUsersPage() {
                       </td>
                       <td className="px-2 py-2 text-sm text-slate-600 dark:text-slate-300 sm:px-4 sm:py-3">
                         {editingId === user.id ? (
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-col gap-1.5 min-w-[9rem]">
                             <input
                               type="number"
                               min={0}
                               step="0.01"
                               value={editingValue}
                               onChange={(e) => setEditingValue(e.target.value)}
-                              className="w-28 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                              title="Amount to add"
+                              className="w-full rounded-md border border-emerald-400/80 bg-white px-2 py-1 text-xs focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-emerald-700 dark:bg-slate-900 dark:text-white"
+                              placeholder="Add"
                             />
-                            <button
-                              type="button"
-                              disabled={savingId === user.id}
-                              onClick={() => handleSaveBalance(user)}
-                              className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-                            >
-                              {savingId === user.id ? "Saving…" : "Save"}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={savingId === user.id}
-                              onClick={cancelEdit}
-                              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
-                            >
-                              Cancel
-                            </button>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={editingNegativeValue}
+                              onChange={(e) => setEditingNegativeValue(e.target.value)}
+                              title="Negative runtime"
+                              className="w-full rounded-md border border-rose-400/80 bg-white px-2 py-1 text-xs focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 dark:border-rose-800 dark:bg-slate-900 dark:text-white"
+                              placeholder="Neg"
+                            />
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                disabled={savingId === user.id}
+                                onClick={() => handleSaveBalance(user)}
+                                className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                {savingId === user.id ? "Saving…" : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={savingId === user.id}
+                                onClick={cancelEdit}
+                                className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           <div className="flex items-center gap-2">
-                            <span>
+                            <span
+                              className={
+                                user.asset_balance != null &&
+                                Number.isFinite(Number(user.asset_balance)) &&
+                                Number(user.asset_balance) < 0
+                                  ? "font-medium text-rose-700 dark:text-rose-300"
+                                  : user.asset_balance != null &&
+                                      Number.isFinite(Number(user.asset_balance)) &&
+                                      Number(user.asset_balance) > 0
+                                    ? "font-medium text-emerald-800 dark:text-emerald-200"
+                                    : ""
+                              }
+                            >
                               {user.asset_balance != null && Number.isFinite(Number(user.asset_balance))
-                                ? `Rs ${Number(user.asset_balance).toFixed(2)}`
+                                ? (() => {
+                                    const n = Number(user.asset_balance);
+                                    return n < 0
+                                      ? `−Rs ${Math.abs(n).toFixed(2)}`
+                                      : `Rs ${n.toFixed(2)}`;
+                                  })()
                                 : "—"}
                             </span>
                             <button

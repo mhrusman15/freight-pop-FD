@@ -1,8 +1,60 @@
-import { clearAuth, getRefreshToken, getToken, setAccessToken } from "./auth-store";
+import {
+  clearAuth,
+  getAdminToken,
+  getRefreshToken,
+  getUserToken,
+  scopeFromPathname,
+  setAccessToken,
+  type AuthScope,
+} from "./auth-store";
+import { ASSET_BALANCE_STORAGE_KEY } from "./asset-balance-store";
+
+/** Which session to use for Authorization — API path first, then current browser route. */
+export function authScopeForRequest(apiPath: string): AuthScope {
+  const p = apiPath.split("?")[0];
+  if (p.startsWith("/api/admin")) return "admin";
+  if (p.startsWith("/api/user")) return "user";
+  if (typeof window !== "undefined") {
+    const authPaths = ["/api/auth/me", "/api/auth/logout", "/api/auth/change-password"];
+    if (authPaths.some((x) => p === x || p.startsWith(x + "/"))) {
+      return scopeFromPathname();
+    }
+  }
+  return typeof window !== "undefined" ? scopeFromPathname() : "user";
+}
+
+function tokenForScope(scope: AuthScope): string | null {
+  return scope === "admin" ? getAdminToken() : getUserToken();
+}
 
 function resolveApiBase(): string {
   const envBase = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (envBase) return envBase.replace(/\/$/, "");
+  if (envBase) {
+    const cleaned = envBase.replace(/\/$/, "");
+
+    // On Vercel, backend is mounted under "/_/backend". If env points to
+    // same-origin root (e.g. "/" or "https://app.example.com"), coerce it.
+    if (typeof window !== "undefined") {
+      const host = window.location.hostname.toLowerCase();
+      const isLocalHost = host === "localhost" || host === "127.0.0.1";
+      if (!isLocalHost) {
+        if (cleaned === "" || cleaned === "/") return `${window.location.origin}/_/backend`;
+        if (cleaned.startsWith("/")) {
+          return cleaned.startsWith("/_/backend") ? cleaned : `${window.location.origin}/_/backend`;
+        }
+        try {
+          const parsed = new URL(cleaned);
+          const sameOrigin = parsed.origin === window.location.origin;
+          const hasBackendPrefix = parsed.pathname === "/_/backend" || parsed.pathname.startsWith("/_/backend/");
+          if (sameOrigin && !hasBackendPrefix) return `${window.location.origin}/_/backend`;
+        } catch {
+          // Fall back to cleaned env value below.
+        }
+      }
+    }
+
+    return cleaned;
+  }
 
   // In deployed environments, call the co-hosted backend service route.
   if (typeof window !== "undefined") {
@@ -28,15 +80,16 @@ function shouldAttemptRefresh(path: string): boolean {
   ].some((p) => base === p || base.endsWith(p));
 }
 
-let refreshInFlight: Promise<boolean> | null = null;
+const refreshInFlightByScope: Partial<Record<AuthScope, Promise<boolean>>> = {};
 
-async function refreshAccessToken(): Promise<boolean> {
+async function refreshAccessToken(scope: AuthScope): Promise<boolean> {
   if (typeof window === "undefined") return false;
-  if (refreshInFlight) return refreshInFlight;
-  const rt = getRefreshToken();
+  const existing = refreshInFlightByScope[scope];
+  if (existing) return existing;
+  const rt = getRefreshToken(scope);
   if (!rt) return false;
 
-  refreshInFlight = (async () => {
+  const job = (async () => {
     try {
       const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: "POST",
@@ -45,23 +98,25 @@ async function refreshAccessToken(): Promise<boolean> {
       });
       const data = (await res.json().catch(() => ({}))) as { token?: string };
       if (!res.ok || !data.token) return false;
-      setAccessToken(data.token);
+      setAccessToken(data.token, scope);
       return true;
     } catch {
       return false;
     } finally {
-      refreshInFlight = null;
+      delete refreshInFlightByScope[scope];
     }
   })();
 
-  return refreshInFlight;
+  refreshInFlightByScope[scope] = job;
+  return job;
 }
 
 export async function api<T>(
   path: string,
   options: RequestInit & { token?: string | null; suppressAuthRedirect?: boolean } = {}
 ): Promise<{ data?: T; error?: string; status: number }> {
-  const { token = getToken(), suppressAuthRedirect = false, ...fetchOptions } = options;
+  const requestScope = authScopeForRequest(path);
+  const { token = tokenForScope(requestScope), suppressAuthRedirect = false, ...fetchOptions } = options;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((fetchOptions.headers as Record<string, string>) || {}),
@@ -76,10 +131,10 @@ export async function api<T>(
       res.status === 401 &&
       !retriedAfterRefresh &&
       shouldAttemptRefresh(path) &&
-      (await refreshAccessToken())
+      (await refreshAccessToken(requestScope))
     ) {
       retriedAfterRefresh = true;
-      const newTok = getToken();
+      const newTok = tokenForScope(requestScope);
       if (newTok) headers["Authorization"] = `Bearer ${newTok}`;
       res = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
     }
@@ -137,8 +192,11 @@ export async function api<T>(
     // clear client auth and send user back to login.
     if (res.status === 401 && typeof window !== "undefined" && !suppressAuthRedirect) {
       try {
-        clearAuth();
-        window.localStorage.removeItem("fp_asset_balance");
+        const scope = authScopeForRequest(path);
+        clearAuth(scope);
+        if (scope === "user") {
+          window.localStorage.removeItem(ASSET_BALANCE_STORAGE_KEY);
+        }
         const isAdminPath = window.location.pathname.startsWith("/admin");
         const loginPath = isAdminPath ? "/admin/login" : "/login";
         if (!window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/admin/login")) {
@@ -181,10 +239,10 @@ export const authApi = {
       user: { id: string; full_name: string; email: string; phone: string; role: string; admin_permissions?: string | null };
     }>("/api/auth/login", { method: "POST", body: JSON.stringify(body) });
   },
-  me(token: string | null) {
+  me(token?: string | null) {
     return api<{ user: { id: string; full_name: string; email: string; phone: string; role: string; admin_permissions?: string | null } }>(
       "/api/auth/me",
-      { token }
+      token != null ? { token } : {}
     );
   },
   changePassword(body: { oldPassword: string; newPassword: string }) {
@@ -288,10 +346,13 @@ export const adminApi = {
   reject(id: string) {
     return api<{ user: unknown; message: string }>(`/api/admin/users/${id}/reject`, { method: "PATCH" });
   },
-  updateUserBalance(id: string, value: number) {
+  updateUserBalance(id: string, value: number, negativeRuntime?: number) {
     return api<{ balance: number; userId: string }>(`/api/admin/users/${id}/balance`, {
       method: "PATCH",
-      body: JSON.stringify({ value }),
+      body: JSON.stringify({
+        value,
+        negativeRuntime: negativeRuntime != null && negativeRuntime > 0 ? negativeRuntime : 0,
+      }),
     });
   },
   deleteUser(id: string) {
@@ -323,6 +384,22 @@ export type UserTaskStatus = {
   taskAssignmentRequestedAt?: string | null;
   taskAssignmentGrantedAt?: string | null;
   primeNegativeAmount?: number;
+  /** When true, prime order UI may show order quantity / reserve impact as negative (admin set a recharge amount). */
+  primeShowNegative?: boolean;
+  /** True after admin saves a positive "Amount to add (runtime)" for this user. */
+  signInRewardFromAdmin?: boolean;
+  /** Reward amount for the check-in notification; only set when signInRewardFromAdmin is true. */
+  signInRewardAmount?: number | null;
+  hasReceivedFirstTasks?: boolean;
+  firstTasksCompleted?: number;
+  firstTasksRemaining?: number;
+  reportProgress?: {
+    lastTaskNo: number;
+    lastAmount: number;
+    cycleInstantProfit: number;
+    lastOrderNumber?: string | null;
+    updatedAt?: string | null;
+  };
 };
 
 export type UserTaskActivityEntry = {
@@ -349,7 +426,7 @@ export type UserOpenTaskResult = {
     rewards: number;
     isPrime: boolean;
   };
-  code?: "PRIME_ORDER_PENDING" | "TASK_ASSIGNMENT_REQUIRED" | "NOT_FOUND";
+  code?: "PRIME_ORDER_PENDING" | "TASK_ASSIGNMENT_REQUIRED" | "INSUFFICIENT_BALANCE" | "NOT_FOUND";
   error?: string;
 };
 

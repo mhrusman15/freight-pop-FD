@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { authApi } from "@/lib/api";
-import { clearAuth, getAuthUser, getToken, setAuth } from "@/lib/auth-store";
+import { getUserData, getUserToken, setAuth } from "@/lib/auth-store";
 
 function LoginContent() {
   const router = useRouter();
@@ -21,9 +21,8 @@ function LoginContent() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const savedRemember =
-      window.localStorage.getItem("userRemember") ?? window.localStorage.getItem("adminRemember");
-    const savedEmail = window.localStorage.getItem("userEmail") ?? window.localStorage.getItem("adminEmail");
+    const savedRemember = window.localStorage.getItem("userRemember");
+    const savedEmail = window.localStorage.getItem("userEmail");
     if (savedEmail) setEmail(savedEmail);
     if (savedRemember === "true") setRememberMe(true);
     else if (savedRemember === "false") setRememberMe(false);
@@ -31,8 +30,8 @@ function LoginContent() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
+    const token = getUserToken();
+    const user = getUserData();
     const authenticated = !!token && !!user;
     setIsAuthenticated(authenticated);
     if (authenticated) {
@@ -79,7 +78,6 @@ function LoginContent() {
     }
 
     if (data.user.role === "admin" || data.user.role === "super_admin") {
-      clearAuth("admin");
       setError("Admin account detected. Please use the admin login page.");
       router.push("/admin/login");
       return;
@@ -93,26 +91,15 @@ function LoginContent() {
         const rememberedEmail = email.trim();
         window.localStorage.setItem("userEmail", rememberedEmail);
         window.localStorage.setItem("userRemember", "true");
-        // Legacy keys kept for pages that still read old names.
-        window.localStorage.setItem("adminEmail", rememberedEmail);
-        window.localStorage.setItem("adminRemember", "true");
       } else {
         window.localStorage.removeItem("userEmail");
         window.localStorage.setItem("userRemember", "false");
-        window.localStorage.removeItem("adminEmail");
-        window.localStorage.setItem("adminRemember", "false");
       }
 
       // Set role-scoped cookie for middleware route protection.
       try {
         const tokenValue = data.token || "12345";
-        const roleCookie =
-          data.user.role === "admin" || data.user.role === "super_admin"
-            ? "adminAuthToken"
-            : "userAuthToken";
-        document.cookie = `${roleCookie}=${encodeURIComponent(tokenValue)}; path=/; SameSite=Lax`;
-        // Legacy fallback cookie used by older middleware.
-        document.cookie = `authToken=${encodeURIComponent(tokenValue)}; path=/; SameSite=Lax`;
+        document.cookie = `userAuthToken=${encodeURIComponent(tokenValue)}; path=/; SameSite=Lax`;
       } catch (err) {
         console.error("[login] failed to set auth cookie", err);
       }
@@ -142,13 +129,6 @@ function LoginContent() {
           <p className="text-sm text-slate-500">
             Please login to your account to continue
           </p>
-        <button
-          type="button"
-          onClick={() => router.push("/admin/login")}
-          className="pt-2 text-xs font-medium text-slate-600 hover:text-slate-900 hover:underline"
-        >
-          Admin? Go to Admin Login
-        </button>
         </div>
 
         {pendingMessage && (

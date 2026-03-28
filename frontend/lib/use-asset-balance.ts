@@ -6,13 +6,14 @@ import {
   formatAssetBalance,
   setAssetBalance,
   ASSET_BALANCE_UPDATED,
+  ASSET_BALANCE_STORAGE_KEY,
 } from "./asset-balance-store";
 import { userApi } from "./api";
-import { getToken } from "./auth-store";
+import { getUserToken } from "./auth-store";
 
 /**
  * Returns current asset balance (number) and formatted string.
- * When user is logged in (has fp_token), balance is fetched from the API (database).
+ * When user is logged in (`user_access_token`), balance is fetched from the API (database).
  * When not logged in, uses localStorage store. Re-renders on ASSET_BALANCE_UPDATED.
  */
 const LIVE_SYNC_MS = 2000;
@@ -21,7 +22,7 @@ let inFlightFetch: Promise<void> | null = null;
 let lastFetchAt = 0;
 
 async function syncBalanceFromApi(): Promise<void> {
-  const token = getToken();
+  const token = getUserToken();
   if (!token) return;
   const now = Date.now();
   if (inFlightFetch) return inFlightFetch;
@@ -49,7 +50,7 @@ export function useAssetBalance(): { balance: number; formatted: string; refetch
 
   const refetch = useCallback(async () => {
     if (isFetchingRef.current) return;
-    const token = getToken();
+    const token = getUserToken();
     if (!token) {
       setBalanceState(getAssetBalance());
       return;
@@ -65,18 +66,22 @@ export function useAssetBalance(): { balance: number; formatted: string; refetch
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (getToken()) {
+    if (getUserToken()) {
       void refetch();
     } else {
       setBalanceState(getAssetBalance());
     }
     const handler = () => setBalanceState(getAssetBalance());
     window.addEventListener(ASSET_BALANCE_UPDATED, handler);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === ASSET_BALANCE_STORAGE_KEY) setBalanceState(getAssetBalance());
+    };
+    window.addEventListener("storage", onStorage);
     const focusHandler = () => {
-      if (getToken()) void refetch();
+      if (getUserToken()) void refetch();
     };
     const interval = window.setInterval(() => {
-      if (document.visibilityState === "visible" && getToken()) {
+      if (document.visibilityState === "visible" && getUserToken()) {
         void refetch();
       }
     }, LIVE_SYNC_MS);
@@ -84,6 +89,7 @@ export function useAssetBalance(): { balance: number; formatted: string; refetch
     document.addEventListener("visibilitychange", focusHandler);
     return () => {
       window.removeEventListener(ASSET_BALANCE_UPDATED, handler);
+      window.removeEventListener("storage", onStorage);
       window.removeEventListener("focus", focusHandler);
       document.removeEventListener("visibilitychange", focusHandler);
       window.clearInterval(interval);

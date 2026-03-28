@@ -3,12 +3,14 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { getAuthUser } from "@/lib/auth-store";
+import { getUserData } from "@/lib/auth-store";
 import { userApi } from "@/lib/api";
 
 // Rewards / gift logo located at frontend/public/images/gift.png
 const REWARDS_GIFT_IMAGE = "/images/gift.png";
 const MAX_CHECKIN_ROUNDS = 7;
+/** Banner always shows this; real admin reward appears only in the check-in success modal. */
+const BANNER_REWARD_DISPLAY = 1000;
 
 function ordinal(n: number): string {
   if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
@@ -20,7 +22,7 @@ function ordinal(n: number): string {
 
 export default function DailyCheckInPage() {
   const router = useRouter();
-  const authUser = getAuthUser();
+  const authUser = getUserData();
   const storageKey = useMemo(
     () =>
       authUser?.id
@@ -34,7 +36,8 @@ export default function DailyCheckInPage() {
   const [pendingGrantAt, setPendingGrantAt] = useState<string | null>(null);
   const [showRewardModal, setShowRewardModal] = useState(false);
   const [showCheckInFailed, setShowCheckInFailed] = useState(false);
-  const [failedMessage, setFailedMessage] = useState("Need to complete 1st round of task to sign in");
+  const [failedMessage, setFailedMessage] = useState("Need to complete 1st round of task to sign");
+  const [modalRewardAmount, setModalRewardAmount] = useState(BANNER_REWARD_DISPLAY);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -53,6 +56,23 @@ export default function DailyCheckInPage() {
       // Ignore invalid storage payloads.
     }
   }, [storageKey]);
+
+  const formatRewardDisplay = (n: number) => {
+    const x = Number(n);
+    if (!Number.isFinite(x)) return "0";
+    return Number.isInteger(x) ? String(x) : x.toFixed(2);
+  };
+
+  /** API / DB may send numbers as strings; normalize for the reward modal. */
+  const coerceRewardAmount = (value: unknown): number | null => {
+    if (value == null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  };
 
   const persistProgress = (
     nextClaimedRounds: number,
@@ -92,6 +112,7 @@ export default function DailyCheckInPage() {
 
       const firstClaimBaseline = baselineGrantAt || grantAt;
       const canClaimForCurrentAssignment =
+        Boolean(status?.signInRewardFromAdmin) &&
         Boolean(grantAt) &&
         grantAt !== (claimedRounds === 0 ? firstClaimBaseline : lastClaimedGrantAt) &&
         Number(status?.quotaUsed ?? 0) === 0 &&
@@ -100,6 +121,9 @@ export default function DailyCheckInPage() {
         claimedRounds < MAX_CHECKIN_ROUNDS;
 
       if (canClaimForCurrentAssignment) {
+        const amt = coerceRewardAmount(status?.signInRewardAmount);
+        const resolved = amt != null && amt >= 0 ? amt : BANNER_REWARD_DISPLAY;
+        setModalRewardAmount(resolved);
         setPendingGrantAt(grantAt);
         setShowRewardModal(true);
         return;
@@ -122,9 +146,6 @@ export default function DailyCheckInPage() {
     setBaselineGrantAt(nextBaseline);
     persistProgress(nextClaimed, nextLastGrant, nextBaseline);
     setShowRewardModal(false);
-
-    const nextRequiredRound = Math.min(nextClaimed + 1, MAX_CHECKIN_ROUNDS);
-    showNextRoundError(nextRequiredRound);
   };
 
   return (
@@ -179,7 +200,9 @@ export default function DailyCheckInPage() {
           <div className="rounded-xl bg-slate-100 border border-slate-200 p-4 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-xl font-bold text-slate-900">+Rs10000</p>
+                <p className="text-xl font-bold text-slate-900">
+                  +Rs{formatRewardDisplay(BANNER_REWARD_DISPLAY)}
+                </p>
                 <p className="mt-1 text-sm text-slate-600">
                   You can get reward for check-in for 7 consecutive day.
                 </p>
@@ -339,7 +362,8 @@ export default function DailyCheckInPage() {
                 </div>
                 <div className="space-y-5 p-8 text-center">
                   <p className="text-4xl font-semibold text-slate-900">
-                    Signed in Rewards <span className="text-red-600">৳1000</span>
+                    sign in reward{" "}
+                    <span className="text-red-600">৳{formatRewardDisplay(modalRewardAmount)}</span>
                   </p>
                   <button
                     type="button"

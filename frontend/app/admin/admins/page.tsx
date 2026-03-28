@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { adminApi, type AdminAdminRow } from "@/lib/api";
-import { getAuthUser } from "@/lib/auth-store";
+import { getAdminUser } from "@/lib/auth-store";
 
 const PERMISSION_LABELS: Record<string, string> = {
   view_only: "View only",
@@ -32,7 +32,7 @@ export default function AdminAdminsPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
 
-  const currentUser = typeof window !== "undefined" ? getAuthUser() : null;
+  const currentUser = typeof window !== "undefined" ? getAdminUser() : null;
   const isSuperAdmin = currentUser?.role === "super_admin";
 
   useEffect(() => {

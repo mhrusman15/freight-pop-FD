@@ -2,7 +2,7 @@
 
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { getAuthUser, getToken, isAdmin } from "@/lib/auth-store";
+import { getUserData, getUserToken, isElevatedUserProfile } from "@/lib/auth-store";
 
 export default function DashboardLayout({
   children,
@@ -15,9 +15,9 @@ export default function DashboardLayout({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
-    if (!token || !user || isAdmin()) {
+    const token = getUserToken();
+    const user = getUserData();
+    if (!token || !user || isElevatedUserProfile(user)) {
       router.replace(`/login?redirect=${encodeURIComponent(pathname || "/dashboard")}`);
       return;
     }

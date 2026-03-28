@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAssetBalance } from "@/lib/use-asset-balance";
-import { getAuthUser, getToken } from "@/lib/auth-store";
+import { getUserData, getUserToken } from "@/lib/auth-store";
 
 export default function ProfileDepositPage() {
   const router = useRouter();
@@ -12,8 +12,8 @@ export default function ProfileDepositPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
+    const token = getUserToken();
+    const user = getUserData();
     const isUserSession = !!token && !!user && user.role !== "admin" && user.role !== "super_admin";
     if (!isUserSession) {
       router.replace("/login");

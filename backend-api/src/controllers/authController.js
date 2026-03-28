@@ -199,6 +199,8 @@ export async function login(req, res) {
     res.json({
       token: sessionData.session.access_token,
       refreshToken: sessionData.session.refresh_token,
+      /** App role (from DB); use the correct client storage slot (admin vs user). Supabase JWT `role` claim is the auth role (e.g. authenticated), not this value. */
+      sessionRole: profile.role,
       user: {
         id: profile.id,
         full_name: profile.full_name,

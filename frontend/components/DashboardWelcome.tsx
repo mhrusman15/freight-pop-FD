@@ -1,17 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { getAuthUser, clearAuth } from "@/lib/auth-store";
+import { getUserData, clearAuth } from "@/lib/auth-store";
 import { useRouter } from "next/navigation";
 
 export function DashboardWelcome() {
   const router = useRouter();
-  const user = typeof window !== "undefined" ? getAuthUser() : null;
+  const user = typeof window !== "undefined" ? getUserData() : null;
 
   if (!user) return null;
 
   const handleLogout = () => {
-    clearAuth();
+    clearAuth("user");
     router.push("/login");
   };
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authApi } from "@/lib/api";
-import { getToken } from "@/lib/auth-store";
+import { getUserToken } from "@/lib/auth-store";
 
 type TabId = "withdrawal" | "login";
 
@@ -85,7 +85,7 @@ export default function ProfileSecurityPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
+    const token = getUserToken();
     const saved = window.localStorage.getItem("adminEmail");
     const remembered = window.localStorage.getItem("adminRemember");
     if (!token && !saved && remembered !== "true") {
@@ -107,7 +107,7 @@ export default function ProfileSecurityPage() {
       setLoginError("New password and confirm password do not match.");
       return;
     }
-    const token = getToken();
+    const token = getUserToken();
     if (token) {
       const result = await authApi.changePassword({
         oldPassword: loginForm.oldPassword,

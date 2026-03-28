@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { getToken, getAuthUser, isAdmin, clearAuth, getLastActive, touchLastActive } from "@/lib/auth-store";
+import { getAdminToken, getAdminUser, isAdmin, clearAuth, getLastActive, touchLastActive } from "@/lib/auth-store";
 import { adminApi } from "@/lib/api";
 
 function useMediaQuery(query: string): boolean {
@@ -77,9 +77,9 @@ export default function AdminLayout({
       return;
     }
     if (typeof window === "undefined") return;
-    const token = getToken();
+    const token = getAdminToken();
     const admin = isAdmin();
-    const lastActive = getLastActive();
+    const lastActive = getLastActive("admin");
     const now = Date.now();
     const expired = !!lastActive && now - lastActive > MAX_IDLE_MS;
     if (!token || !admin || expired) {
@@ -89,7 +89,7 @@ export default function AdminLayout({
       router.replace(`/admin/login?redirect=${redirect}${sessionParam}`);
       return;
     }
-    touchLastActive();
+    touchLastActive("admin");
     setAllowed(true);
   }, [pathname, router, isAdminLoginRoute]);
 
@@ -100,14 +100,14 @@ export default function AdminLayout({
     if (typeof window === "undefined") return;
 
     const activityHandler = () => {
-      touchLastActive();
+      touchLastActive("admin");
     };
 
     const events: (keyof WindowEventMap)[] = ["click", "keydown", "mousemove", "scroll", "focus"];
     events.forEach((evt) => window.addEventListener(evt, activityHandler));
 
     const interval = window.setInterval(() => {
-      const lastActive = getLastActive();
+      const lastActive = getLastActive("admin");
       if (!lastActive) return;
       const now = Date.now();
       if (now - lastActive > MAX_IDLE_MS) {
@@ -137,7 +137,7 @@ export default function AdminLayout({
     return () => clearInterval(interval);
   }, [allowed, isAdminLoginRoute]);
 
-  const user = typeof window !== "undefined" ? getAuthUser() : null;
+  const user = typeof window !== "undefined" ? getAdminUser() : null;
 
   if (isAdminLoginRoute) {
     return <>{children}</>;

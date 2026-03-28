@@ -9,6 +9,16 @@ import {
   nowIso,
 } from "../lib/taskGeneration.js";
 
+/** Scales task commission using the last admin credit (linear, max +50%). */
+function applyAdminDepositProfitBoost(commission, row) {
+  const c = Number(commission);
+  if (!Number.isFinite(c) || c <= 0) return c;
+  const basis = Math.max(0, Number(row?.admin_deposit_profit_basis ?? 0) || 0);
+  if (basis <= 0) return Number(c.toFixed(2));
+  const factor = 1 + Math.min(basis / 400000, 0.5);
+  return Number((c * factor).toFixed(2));
+}
+
 function accountStatusFromRow(row) {
   if (!row) return null;
   if (row.rejected) return "rejected";
@@ -60,6 +70,23 @@ async function insertActivityLog(userId, message) {
     user_id: userId,
     message,
   });
+  if (error) throw error;
+}
+
+async function getReportProgressRow(userId) {
+  const { data, error } = await supabaseAdmin
+    .from("user_report_progress")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function upsertReportProgress(userId, patch) {
+  const { error } = await supabaseAdmin
+    .from("user_report_progress")
+    .upsert({ user_id: userId, ...patch }, { onConflict: "user_id" });
   if (error) throw error;
 }
 
@@ -160,15 +187,35 @@ export const User = {
     return data ? Number(data.balance) : null;
   },
 
-  async addToBalance(userId, amount, { recordDeposit = false } = {}) {
+  async addToBalance(
+    userId,
+    amount,
+    {
+      recordDeposit = false,
+      clearPrimeNegative = false,
+      enableX5Profit = false,
+      setAdminDepositBasis = false,
+    } = {}
+  ) {
     const num = Number(amount);
     if (!Number.isFinite(num) || num < 0) throw new Error("Invalid amount");
     const row = await loadUserRow(userId);
     if (!row) return null;
     const next = Number(row.balance ?? 0) + num;
+    const updatePatch = { balance: next };
+    if (clearPrimeNegative) {
+      // Admin top-up should remove any forced prime-negative display.
+      updatePatch.prime_negative_amount = 0;
+    }
+    if (setAdminDepositBasis && num > 0) {
+      updatePatch.admin_deposit_profit_basis = num;
+    }
+    if (enableX5Profit && num > 0) {
+      updatePatch.x5_profit_enabled = true;
+    }
     const { data, error } = await supabaseAdmin
       .from("users")
-      .update({ balance: next })
+      .update(updatePatch)
       .eq("id", userId)
       .select("balance")
       .maybeSingle();
@@ -176,6 +223,56 @@ export const User = {
     if (recordDeposit && data) {
       await insertTransaction(userId, "deposit", num, "approved");
     }
+    return data ? Number(data.balance) : null;
+  },
+
+  /**
+   * Admin panel: optional positive add (algebraic) plus optional "negative runtime" that sets
+   * balance to -(abs(balance after add) + negativeRuntime), e.g. old 10000 + neg 15000 → -25000.
+   */
+  async adminRuntimeBalanceAdjust(
+    userId,
+    { positiveAdd = 0, negativeRuntime = 0 } = {},
+    {
+      clearPrimeNegative = true,
+      enableX5Profit = true,
+      setAdminDepositBasis = true,
+    } = {}
+  ) {
+    const pos = Number(positiveAdd);
+    const neg = Number(negativeRuntime);
+    if (!Number.isFinite(pos) || pos < 0) throw new Error("Invalid positive add");
+    if (!Number.isFinite(neg) || neg < 0) throw new Error("Invalid negative runtime");
+    if (pos === 0 && neg === 0) throw new Error("No adjustment");
+
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+
+    let next = Number(row.balance ?? 0) + pos;
+    if (neg > 0) {
+      next = -(Math.abs(next) + neg);
+    }
+
+    const updatePatch = { balance: next };
+    if (clearPrimeNegative) {
+      updatePatch.prime_negative_amount = 0;
+    }
+    if (setAdminDepositBasis && pos > 0) {
+      updatePatch.admin_deposit_profit_basis = pos;
+    }
+    if (enableX5Profit && pos > 0) {
+      updatePatch.x5_profit_enabled = true;
+    }
+    if (pos > 0) {
+      updatePatch.sign_in_reward_amount = pos;
+    }
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update(updatePatch)
+      .eq("id", userId)
+      .select("balance")
+      .maybeSingle();
+    if (error) throw error;
     return data ? Number(data.balance) : null;
   },
 
@@ -244,6 +341,7 @@ export const User = {
             task_assignment_granted_at: null,
             prime_order_slots: [],
             prime_negative_amount: 0,
+            admin_deposit_profit_basis: 0,
             image_cycle_state: buildImageCycles(),
             has_received_first_tasks: true,
             first_tasks_completed: 0,
@@ -516,6 +614,7 @@ export const User = {
   async getTaskAssignmentStatus(userId) {
     const row = await loadUserRow(userId);
     if (!row) return null;
+    const reportProgress = await getReportProgressRow(userId);
 
     const total = Number(row.task_quota_total || TASK_DAILY_LIMIT);
     const used = Number(row.task_quota_used || 0);
@@ -525,12 +624,37 @@ export const User = {
     const requestedAt = row.task_assignment_requested_at ? new Date(row.task_assignment_requested_at) : null;
     const grantedAt = row.task_assignment_granted_at ? new Date(row.task_assignment_granted_at) : null;
     const primeNegativeAmount = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
+    const primeShowNegative = Boolean(row.prime_show_negative);
 
     const firstRemaining = Math.max(0, TASK_DAILY_LIMIT - firstCompleted);
     const remaining = Math.max(0, total - used);
     const canUseFirstTasks = hasReceivedFirstTasks && firstCompleted < TASK_DAILY_LIMIT;
     const canUseAssignedTasks = !required && used < total;
-    const canPerformTasks = canUseFirstTasks || canUseAssignedTasks;
+    let canPerformTasks = canUseFirstTasks || canUseAssignedTasks;
+
+    const rawBalance = Number(row.balance ?? 0) || 0;
+    if (rawBalance < 0) {
+      canPerformTasks = false;
+    }
+
+    const { data: openTaskRows } = await supabaseAdmin
+      .from("user_tasks")
+      .select("is_prime")
+      .eq("user_id", userId)
+      .eq("status", "open")
+      .limit(1);
+    const openPrimePending = Boolean(openTaskRows?.[0]?.is_prime);
+    const balance = Math.max(0, rawBalance);
+    /** Only block tasks when the *current* open order is prime and balance is below the required recharge — not before reaching the prime slot. */
+    if (openPrimePending && primeNegativeAmount > 0 && balance < primeNegativeAmount) {
+      canPerformTasks = false;
+    }
+
+    const signInRewardAmount = Math.max(
+      0,
+      Number(row.sign_in_reward_amount ?? 1000) || 1000,
+    );
+
     return {
       userId,
       quotaTotal: total,
@@ -542,9 +666,18 @@ export const User = {
       taskAssignmentRequestedAt: requestedAt ? requestedAt.toISOString() : null,
       taskAssignmentGrantedAt: grantedAt ? grantedAt.toISOString() : null,
       primeNegativeAmount,
+      primeShowNegative,
+      signInRewardAmount,
       hasReceivedFirstTasks,
       firstTasksCompleted: firstCompleted,
       firstTasksRemaining: firstRemaining,
+      reportProgress: {
+        lastTaskNo: Number(reportProgress?.last_task_no || 0),
+        lastAmount: Number(reportProgress?.last_amount || 0),
+        cycleInstantProfit: Number(reportProgress?.cycle_instant_profit || 0),
+        lastOrderNumber: reportProgress?.last_order_number || null,
+        updatedAt: reportProgress?.updated_at || null,
+      },
     };
   },
 
@@ -557,24 +690,37 @@ export const User = {
     if (!targetPending) {
       return { error: "No pending task found", code: "PENDING_TASK_NOT_FOUND" };
     }
-    if (targetPending.is_prime) {
-      return { error: "check your acitivty task you get prime order", code: "PRIME_ORDER_PENDING" };
+    const row = await loadUserRow(userId);
+    if (!row) return { error: "User not found", code: "NOT_FOUND" };
+    if (Number(row.balance ?? 0) < 0) {
+      const status = await this.getTaskAssignmentStatus(userId);
+      return {
+        error: "Your balance is insufficient please recharge",
+        code: "INSUFFICIENT_BALANCE",
+        status,
+      };
     }
-
     const status = await this.getTaskAssignmentStatus(userId);
     if (!status) return { error: "User not found", code: "NOT_FOUND" };
     if (!status.canPerformTasks) {
       return { error: "Task assignment required", code: "TASK_ASSIGNMENT_REQUIRED", status };
     }
 
-    const commission = Math.max(0, Number(targetPending.payload?.commissionRs) || 0);
+    let commission = Math.max(0, Number(targetPending.payload?.commissionRs) || 0);
     const wasFirstTimeTask = Boolean(targetPending.is_first_time);
-
-    const row = await loadUserRow(userId);
-    if (!row) return { error: "User not found", code: "NOT_FOUND" };
+    if (targetPending.is_prime) {
+      const required = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
+      const currentBalance = Math.max(0, Number(row.balance ?? 0) || 0);
+      if (required > 0 && currentBalance < required) {
+        return { error: "check your acitivty task you get prime order", code: "PRIME_ORDER_PENDING" };
+      }
+    }
     const total = Number(row.task_quota_total || TASK_DAILY_LIMIT);
     const used = Number(row.task_quota_used || 0);
     const firstTasksCompleted = Number(row.first_tasks_completed || 0);
+    if (!targetPending.is_prime && Boolean(row.x5_profit_enabled) && !Boolean(targetPending.payload?.x5BoostApplied)) {
+      commission = Number((commission * 5).toFixed(2));
+    }
     const newBalance = Number(row.balance ?? 0) + commission;
 
     const userPatch = {
@@ -583,6 +729,10 @@ export const User = {
     };
     if (wasFirstTimeTask) {
       userPatch.first_tasks_completed = firstTasksCompleted + 1;
+      if (firstTasksCompleted + 1 >= TASK_DAILY_LIMIT) {
+        userPatch.task_assignment_required = true;
+        userPatch.task_assignment_requested_at = row.task_assignment_requested_at || new Date().toISOString();
+      }
     } else {
       userPatch.task_quota_used = used + 1;
       if (used + 1 >= total) {
@@ -605,6 +755,15 @@ export const User = {
     if (upErr) throw upErr;
 
     const completedTaskNo = Number(targetPending.task_no || 0);
+    const completedOrderNumber = String(targetPending.payload?.orderNumber || "");
+    const previousReport = await getReportProgressRow(userId);
+    const nextCycleProfit = Number(previousReport?.cycle_instant_profit || 0) + commission;
+    await upsertReportProgress(userId, {
+      last_task_no: completedTaskNo,
+      last_amount: commission,
+      cycle_instant_profit: nextCycleProfit,
+      last_order_number: completedOrderNumber || null,
+    });
     await insertActivityLog(
       userId,
       wasFirstTimeTask
@@ -647,6 +806,7 @@ export const User = {
         task_assignment_granted_at: new Date().toISOString(),
         prime_order_slots: [],
         prime_negative_amount: 0,
+        admin_deposit_profit_basis: 0,
         image_cycle_state: buildImageCycles(),
       })
       .eq("id", userId)
@@ -654,6 +814,12 @@ export const User = {
     if (error) throw error;
 
     await insertActivityLog(userId, "Admin assigned 30 tasks");
+    await upsertReportProgress(userId, {
+      last_task_no: 0,
+      last_amount: 0,
+      cycle_instant_profit: 0,
+      last_order_number: null,
+    });
     const firstTaskPending = await this._insertOpenTask(userId, 1, false, []);
     if (!firstTaskPending) return null;
     return this.getTaskAssignmentStatus(userId);
@@ -666,6 +832,18 @@ export const User = {
     const slotSet = new Set(primeSlots || row.prime_order_slots || []);
     const isPrimeTask = Boolean(slotSet.has(taskNo));
     const { task, imageState: nextState } = makeUserTaskFromState(taskNo, isPrimeTask, imageState);
+    const hasX5Boost = Boolean(row.x5_profit_enabled);
+    if (!isPrimeTask && hasX5Boost) {
+      task.commissionRs = Number((Number(task.commissionRs || 0) * 5).toFixed(2));
+    }
+    task.commissionRs = applyAdminDepositProfitBoost(task.commissionRs, row);
+
+    const primeNeg = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
+    // Prime catalog uses positive min/max; when admin sets a negative order amount, always store that.
+    if (isPrimeTask && primeNeg > 0) {
+      task.quantityRs = Number((-primeNeg).toFixed(2));
+    }
+
     await supabaseAdmin.from("users").update({ image_cycle_state: nextState }).eq("id", userId);
 
     const createdAt = nowIso();
@@ -679,6 +857,7 @@ export const User = {
       status: "pending",
       taskNo,
       isPrime: isPrimeTask,
+      x5BoostApplied: !isPrimeTask && hasX5Boost,
       task,
     };
 
@@ -714,8 +893,19 @@ export const User = {
     const safeNegative = cleaned.length ? Math.max(0, Number(primeNegativeAmount) || 0) : 0;
     await supabaseAdmin
       .from("users")
-      .update({ prime_order_slots: cleaned, prime_negative_amount: safeNegative })
+      .update({
+        prime_order_slots: cleaned,
+        prime_negative_amount: safeNegative,
+        prime_show_negative: safeNegative > 0,
+      })
       .eq("id", userId);
+
+    if (safeNegative > 0) {
+      await insertActivityLog(
+        userId,
+        `Prime order: add at least Rs ${safeNegative.toFixed(2)} to your balance to complete this order.`
+      );
+    }
 
     const { data: openList } = await supabaseAdmin
       .from("user_tasks")
@@ -748,6 +938,7 @@ export const User = {
   },
 
   async getTaskActivities(userId) {
+    const row = await loadUserRow(userId);
     const [{ data: rows, error }, { data: logs, error: logErr }] = await Promise.all([
       supabaseAdmin
         .from("user_tasks")
@@ -760,11 +951,16 @@ export const User = {
     if (logErr) throw logErr;
     const taskEntries = (rows || []).map((r) => {
       const p = r.payload || {};
+      let quantityRs = Number(p.quantityRs || 0);
+      if (r.status === "open" && r.is_prime && row) {
+        const pn = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
+        if (pn > 0) quantityRs = Number((-pn).toFixed(2));
+      }
       return {
         id: r.id,
         title: p.title,
         orderNumber: p.orderNumber,
-        quantityRs: p.quantityRs,
+        quantityRs,
         commissionRs: p.commissionRs,
         createdAt: r.created_at,
         status: r.status === "open" ? "pending" : "completed",
@@ -795,6 +991,14 @@ export const User = {
   async openTask(userId) {
     const row = await loadUserRow(userId);
     if (!row) return { error: "User not found", code: "NOT_FOUND" };
+    if (Number(row.balance ?? 0) < 0) {
+      const status = await this.getTaskAssignmentStatus(userId);
+      return {
+        error: "Your balance is insufficient please recharge",
+        code: "INSUFFICIENT_BALANCE",
+        status,
+      };
+    }
     const status = await this.getTaskAssignmentStatus(userId);
     if (!status) return { error: "User not found", code: "NOT_FOUND" };
 
@@ -809,6 +1013,13 @@ export const User = {
       const p = existingPending.payload || {};
       const activity = { ...p, id: existingPending.id, status: "pending" };
       if (existingPending.is_prime) {
+        const pn = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
+        if (pn > 0) {
+          activity.quantityRs = Number((-pn).toFixed(2));
+          if (activity.task && typeof activity.task === "object") {
+            activity.task = { ...activity.task, quantityRs: Number((-pn).toFixed(2)) };
+          }
+        }
         return {
           code: "PRIME_ORDER_PENDING",
           error: "check your acitivty task you get prime order",
@@ -816,7 +1027,22 @@ export const User = {
           activity,
         };
       }
+      if (!status.canPerformTasks) {
+        return {
+          error: "No tasks available. Check your activity track",
+          code: "TASK_ASSIGNMENT_REQUIRED",
+          status,
+        };
+      }
       return { status, activity, task: p.task };
+    }
+
+    if (!status.canPerformTasks) {
+      return {
+        error: "No tasks available. Check your activity track",
+        code: "TASK_ASSIGNMENT_REQUIRED",
+        status,
+      };
     }
 
     const firstCompleted = Number(row.first_tasks_completed || 0);

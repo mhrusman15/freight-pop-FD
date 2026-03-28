@@ -2,7 +2,7 @@
 
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { getToken, getAuthUser, isAdmin } from "@/lib/auth-store";
+import { getUserData, getUserToken, isElevatedUserProfile } from "@/lib/auth-store";
 
 export default function ProfileLayout({
   children,
@@ -15,10 +15,10 @@ export default function ProfileLayout({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
+    const token = getUserToken();
+    const user = getUserData();
 
-    if (!token || !user || isAdmin()) {
+    if (!token || !user || isElevatedUserProfile(user)) {
       const redirect = encodeURIComponent(pathname || "/profile");
       router.replace(`/login?redirect=${redirect}`);
       return;

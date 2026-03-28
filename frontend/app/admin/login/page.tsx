@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi } from "@/lib/api";
-import { clearAuth, getAuthUser, getToken, setAuth } from "@/lib/auth-store";
+import { getAdminToken, getAdminUser, setAuth } from "@/lib/auth-store";
 
 function AdminLoginContent() {
   const router = useRouter();
@@ -33,8 +33,8 @@ function AdminLoginContent() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
+    const token = getAdminToken();
+    const user = getAdminUser();
     const authenticated = !!token && !!user;
     setIsAuthenticated(authenticated);
     if (authenticated && (user.role === "admin" || user.role === "super_admin")) {
@@ -68,7 +68,6 @@ function AdminLoginContent() {
     }
 
     if (data.user.role !== "admin" && data.user.role !== "super_admin") {
-      clearAuth("user");
       setError("This portal is only for admin accounts. Please use user login.");
       router.push("/login");
       return;
@@ -87,7 +86,6 @@ function AdminLoginContent() {
 
       try {
         document.cookie = `adminAuthToken=${encodeURIComponent(data.token)}; path=/; SameSite=Lax`;
-        document.cookie = `authToken=${encodeURIComponent(data.token)}; path=/; SameSite=Lax`;
       } catch {
         // no-op
       }

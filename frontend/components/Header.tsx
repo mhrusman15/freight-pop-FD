@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { clearAuth, getAuthUser, getToken } from "@/lib/auth-store";
+import { clearAuth, getUserData, getUserToken } from "@/lib/auth-store";
 
 function HamburgerIcon({ className }: { className?: string }) {
   return (
@@ -33,8 +33,8 @@ export function Header() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = getToken();
-    const user = getAuthUser();
+    const token = getUserToken();
+    const user = getUserData();
     const userLoggedIn = !!token && !!user && user.role !== "admin" && user.role !== "super_admin";
     setIsLoggedIn(userLoggedIn);
   }, [pathname]);

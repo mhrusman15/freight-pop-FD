@@ -7,6 +7,7 @@ export function proxy(request: NextRequest) {
 
   const isAuthRoute =
     pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/profile") ||
     pathname.startsWith("/admin");
 
   if (!isAuthRoute || isAdminLoginRoute) {
@@ -15,6 +16,7 @@ export function proxy(request: NextRequest) {
 
   const requiredCookie = pathname.startsWith("/admin") ? "adminAuthToken" : "userAuthToken";
   const scopedCookie = request.cookies.get(requiredCookie);
+  /** @deprecated single-cookie sessions; kept briefly so older tabs still pass edge checks */
   const legacyCookie = request.cookies.get("authToken");
 
   if (!scopedCookie?.value && !legacyCookie?.value) {
@@ -32,5 +34,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/admin/:path*"],
+  matcher: ["/dashboard/:path*", "/profile/:path*", "/admin/:path*"],
 };
