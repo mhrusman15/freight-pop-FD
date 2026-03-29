@@ -1,11 +1,9 @@
 /**
- * Single source of truth for user Asset Balance.
- * Stored in localStorage so Profile, Withdraw, Deposit, and User Report
- * all show the same value. When balance changes (e.g. after withdraw/deposit),
- * any page that reads from this store will get the updated value on next load/mount.
+ * Session-scoped cache for asset balance (not persisted across browser restarts).
+ * Authoritative value always comes from GET /api/user/balance via `useAssetBalance`.
  */
 
-/** localStorage key — also used for cross-tab sync in `use-asset-balance`. */
+/** sessionStorage key — same-tab updates + custom event for React subscribers. */
 export const ASSET_BALANCE_STORAGE_KEY = "fp_asset_balance";
 const DEFAULT_BALANCE = 0;
 
@@ -15,7 +13,7 @@ export const ASSET_BALANCE_UPDATED = "fp_asset_balance_updated";
 function read(): number {
   if (typeof window === "undefined") return DEFAULT_BALANCE;
   try {
-    const raw = window.localStorage.getItem(ASSET_BALANCE_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(ASSET_BALANCE_STORAGE_KEY);
     if (raw == null) return DEFAULT_BALANCE;
     const n = parseFloat(raw);
     return Number.isFinite(n) ? n : DEFAULT_BALANCE;
@@ -27,7 +25,7 @@ function read(): number {
 function write(value: number) {
   if (typeof window === "undefined") return;
   const safe = Number.isFinite(value) ? value : DEFAULT_BALANCE;
-  window.localStorage.setItem(ASSET_BALANCE_STORAGE_KEY, String(safe));
+  window.sessionStorage.setItem(ASSET_BALANCE_STORAGE_KEY, String(safe));
   window.dispatchEvent(new CustomEvent(ASSET_BALANCE_UPDATED, { detail: safe }));
 }
 

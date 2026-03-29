@@ -61,7 +61,7 @@ export async function completeTask(req, res) {
     }
     if (status.code === "INSUFFICIENT_BALANCE") {
       return res.status(403).json({
-        error: status.error || "Your balance is insufficient please recharge",
+        error: status.error || "Insufficient balance. Please recharge.",
         code: "INSUFFICIENT_BALANCE",
         status: status.status,
       });
@@ -71,8 +71,9 @@ export async function completeTask(req, res) {
     }
     if (status.code === "PRIME_ORDER_PENDING") {
       return res.status(403).json({
-        error: "check your acitivty task you get prime order",
+        error: status.error || "Insufficient balance. Please recharge.",
         code: "PRIME_ORDER_PENDING",
+        status: status.status,
       });
     }
     res.json(status);
@@ -96,7 +97,7 @@ export async function openTask(req, res) {
     }
     if (result.code === "INSUFFICIENT_BALANCE") {
       return res.status(403).json({
-        error: result.error || "Your balance is insufficient please recharge",
+        error: result.error || "Insufficient balance. Please recharge.",
         code: "INSUFFICIENT_BALANCE",
         status: result.status,
       });

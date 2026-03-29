@@ -195,7 +195,7 @@ export async function api<T>(
         const scope = authScopeForRequest(path);
         clearAuth(scope);
         if (scope === "user") {
-          window.localStorage.removeItem(ASSET_BALANCE_STORAGE_KEY);
+          window.sessionStorage.removeItem(ASSET_BALANCE_STORAGE_KEY);
         }
         const isAdminPath = window.location.pathname.startsWith("/admin");
         const loginPath = isAdminPath ? "/admin/login" : "/login";
@@ -273,6 +273,8 @@ export type AdminUserRow = {
   task_assignment_required?: boolean;
   task_assignment_requested_at?: string | null;
   task_assignment_granted_at?: string | null;
+  prime_order_slots?: number[];
+  prime_negative_amount?: number;
 };
 
 export type AdminAdminRow = {
@@ -346,12 +348,13 @@ export const adminApi = {
   reject(id: string) {
     return api<{ user: unknown; message: string }>(`/api/admin/users/${id}/reject`, { method: "PATCH" });
   },
-  updateUserBalance(id: string, value: number, negativeRuntime?: number) {
+  updateUserBalance(id: string, positiveAdd: number, negativeRuntime?: number) {
     return api<{ balance: number; userId: string }>(`/api/admin/users/${id}/balance`, {
       method: "PATCH",
       body: JSON.stringify({
-        value,
+        positiveAdd,
         negativeRuntime: negativeRuntime != null && negativeRuntime > 0 ? negativeRuntime : 0,
+        value: positiveAdd,
       }),
     });
   },

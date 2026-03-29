@@ -9,7 +9,6 @@ import {
   getTitleFromImageName,
   type Task,
 } from "./data/tasks";
-import { getAssetBalance, setAssetBalance } from "@/lib/asset-balance-store";
 import { useAssetBalance } from "@/lib/use-asset-balance";
 import {
   userApi,
@@ -150,7 +149,7 @@ function primeBlockedToastMessage(primeNegativeAmount: number): string {
     : "Your balance is insufficient please recharge";
 }
 
-const INSUFFICIENT_BALANCE_RECHARGE_TOAST = "Your balance is insufficient please recharge";
+const INSUFFICIENT_BALANCE_RECHARGE_TOAST = "Insufficient balance. Please recharge.";
 
 const ACTIVITY_TRACK_TOAST = "check your acitivty track";
 
@@ -218,8 +217,11 @@ export function ReportClient() {
     }
   }
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
-  const { formatted: assetBalanceFormatted, balance: assetBalance, refetch: refetchAssetBalance } =
-    useAssetBalance();
+  const {
+    formatted: assetBalanceFormatted,
+    balance: assetBalance,
+    refetch: refetchAssetBalance,
+  } = useAssetBalance();
   const [instantProfit, setInstantProfit] = useState(0);
   const [completedInCycle, setCompletedInCycle] = useState(0);
   const [activeTask, setActiveTask] = useState<Task>(() => createRandomTask(1));
@@ -531,13 +533,8 @@ export function ReportClient() {
         }
         void (async () => {
           await refetchAssetBalance();
-          const b = getAssetBalance();
-          if (Number.isFinite(b) && b >= 0) {
-            void refreshTaskStatus();
-            showActivityTrackToast(setToastMessage);
-          } else {
-            showRechargeToast(setToastMessage);
-          }
+          showActivityTrackToast(setToastMessage);
+          void refreshTaskStatus();
         })();
         return;
       }
@@ -674,11 +671,15 @@ export function ReportClient() {
         );
       });
       setActivePendingEntryId(null);
-      {
-        const next = getAssetBalance() + activeTask.commission;
-        setAssetBalance(next);
+      void refetchAssetBalance();
+      if (res.data?.reportProgress != null) {
+        setInstantProfit(Math.max(0, Number(res.data.reportProgress.cycleInstantProfit ?? 0)));
+      } else {
+        void refreshTaskStatus().then((r) => {
+          const cp = r.data?.reportProgress?.cycleInstantProfit;
+          if (cp != null) setInstantProfit(Math.max(0, Number(cp)));
+        });
       }
-      setInstantProfit((p) => p + activeTask.commission);
       setCurrentTaskIndex((i) => {
         const nextIdx = i + 1;
         if (nextIdx >= total) return total - 1;
@@ -814,11 +815,15 @@ export function ReportClient() {
             : item,
         ),
       );
-      {
-        const next = getAssetBalance() + Math.max(0, Number(entry.commissionRs || 0));
-        setAssetBalance(next);
+      void refetchAssetBalance();
+      if (res.data?.reportProgress != null) {
+        setInstantProfit(Math.max(0, Number(res.data.reportProgress.cycleInstantProfit ?? 0)));
+      } else {
+        void refreshTaskStatus().then((r) => {
+          const cp = r.data?.reportProgress?.cycleInstantProfit;
+          if (cp != null) setInstantProfit(Math.max(0, Number(cp)));
+        });
       }
-      setInstantProfit((p) => p + Math.max(0, Number(entry.commissionRs || 0)));
       void loadTaskActivity();
     });
   };

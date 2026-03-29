@@ -13,8 +13,8 @@ import { getUserToken } from "./auth-store";
 
 /**
  * Returns current asset balance (number) and formatted string.
- * When user is logged in (`user_access_token`), balance is fetched from the API (database).
- * When not logged in, uses localStorage store. Re-renders on ASSET_BALANCE_UPDATED.
+ * When logged in, balance is loaded from GET /api/user/balance (database is source of truth).
+ * Session cache is updated after each fetch; re-renders on ASSET_BALANCE_UPDATED.
  */
 const LIVE_SYNC_MS = 2000;
 const MIN_FETCH_GAP_MS = 800;

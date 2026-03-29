@@ -204,8 +204,8 @@ export const User = {
     const next = Number(row.balance ?? 0) + num;
     const updatePatch = { balance: next };
     if (clearPrimeNegative) {
-      // Admin top-up should remove any forced prime-negative display.
       updatePatch.prime_negative_amount = 0;
+      updatePatch.prime_show_negative = false;
     }
     if (setAdminDepositBasis && num > 0) {
       updatePatch.admin_deposit_profit_basis = num;
@@ -254,8 +254,9 @@ export const User = {
     }
 
     const updatePatch = { balance: next };
-    if (clearPrimeNegative) {
+    if (clearPrimeNegative && pos > 0) {
       updatePatch.prime_negative_amount = 0;
+      updatePatch.prime_show_negative = false;
     }
     if (setAdminDepositBasis && pos > 0) {
       updatePatch.admin_deposit_profit_basis = pos;
@@ -401,6 +402,8 @@ export const User = {
       task_assignment_required: Boolean(u.task_assignment_required),
       task_assignment_requested_at: u.task_assignment_requested_at || null,
       task_assignment_granted_at: u.task_assignment_granted_at || null,
+      prime_order_slots: Array.isArray(u.prime_order_slots) ? u.prime_order_slots : [],
+      prime_negative_amount: Number(u.prime_negative_amount ?? 0),
       created_at: u.created_at,
       updated_at: u.updated_at || u.created_at,
     }));
@@ -695,7 +698,7 @@ export const User = {
     if (Number(row.balance ?? 0) < 0) {
       const status = await this.getTaskAssignmentStatus(userId);
       return {
-        error: "Your balance is insufficient please recharge",
+        error: "Insufficient balance. Please recharge.",
         code: "INSUFFICIENT_BALANCE",
         status,
       };
@@ -712,7 +715,11 @@ export const User = {
       const required = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
       const currentBalance = Math.max(0, Number(row.balance ?? 0) || 0);
       if (required > 0 && currentBalance < required) {
-        return { error: "check your acitivty task you get prime order", code: "PRIME_ORDER_PENDING" };
+        return {
+          error: "Insufficient balance. Please recharge.",
+          code: "PRIME_ORDER_PENDING",
+          status,
+        };
       }
     }
     const total = Number(row.task_quota_total || TASK_DAILY_LIMIT);
@@ -806,6 +813,7 @@ export const User = {
         task_assignment_granted_at: new Date().toISOString(),
         prime_order_slots: [],
         prime_negative_amount: 0,
+        prime_show_negative: false,
         admin_deposit_profit_basis: 0,
         image_cycle_state: buildImageCycles(),
       })
@@ -890,17 +898,20 @@ export const User = {
       )
     ).sort((a, b) => a - b);
 
-    const safeNegative = cleaned.length ? Math.max(0, Number(primeNegativeAmount) || 0) : 0;
+    const safeNegative =
+      cleaned.length > 0 ? Math.abs(Number(primeNegativeAmount) || 0) : 0;
+    const showNegative = cleaned.length > 0 && safeNegative > 0;
+
     await supabaseAdmin
       .from("users")
       .update({
         prime_order_slots: cleaned,
-        prime_negative_amount: safeNegative,
-        prime_show_negative: safeNegative > 0,
+        prime_negative_amount: cleaned.length ? safeNegative : 0,
+        prime_show_negative: cleaned.length ? showNegative : false,
       })
       .eq("id", userId);
 
-    if (safeNegative > 0) {
+    if (showNegative) {
       await insertActivityLog(
         userId,
         `Prime order: add at least Rs ${safeNegative.toFixed(2)} to your balance to complete this order.`
@@ -916,18 +927,11 @@ export const User = {
     const currentPending = openList?.[0];
 
     if (!currentPending) {
-      const status = await this.getTaskAssignmentStatus(userId);
-      if (!status || !status.canPerformTasks) {
-        return { userId, slots: cleaned };
-      }
-      const nextTaskNo = Math.min(TASK_DAILY_LIMIT, Math.max(1, Number(status.quotaUsed || 0) + 1));
-      await supabaseAdmin.from("user_tasks").delete().eq("user_id", userId).eq("status", "open");
-      await this._insertOpenTask(userId, nextTaskNo, false, cleaned);
-    } else {
-      const currentTaskNo = Number(currentPending.task_no) || 1;
-      await supabaseAdmin.from("user_tasks").delete().eq("id", currentPending.id);
-      await this._insertOpenTask(userId, currentTaskNo, false, cleaned);
+      return { userId, slots: cleaned };
     }
+    const currentTaskNo = Number(currentPending.task_no) || 1;
+    await supabaseAdmin.from("user_tasks").delete().eq("id", currentPending.id);
+    await this._insertOpenTask(userId, currentTaskNo, false, cleaned);
     return { userId, slots: cleaned };
   },
 
@@ -994,7 +998,7 @@ export const User = {
     if (Number(row.balance ?? 0) < 0) {
       const status = await this.getTaskAssignmentStatus(userId);
       return {
-        error: "Your balance is insufficient please recharge",
+        error: "Insufficient balance. Please recharge.",
         code: "INSUFFICIENT_BALANCE",
         status,
       };
@@ -1060,6 +1064,18 @@ export const User = {
       return {
         error: "No tasks available. Check your activity track",
         code: "TASK_ASSIGNMENT_REQUIRED",
+        status,
+      };
+    }
+
+    const slotSetForOpen = new Set(Array.isArray(primeSlots) ? primeSlots : []);
+    const willBePrime = slotSetForOpen.has(taskNo);
+    const primeReq = Math.max(0, Number(row.prime_negative_amount ?? 0) || 0);
+    const rawBal = Number(row.balance ?? 0) || 0;
+    if (willBePrime && primeReq > 0 && rawBal < primeReq) {
+      return {
+        error: "Insufficient balance. Please recharge.",
+        code: "PRIME_ORDER_PENDING",
         status,
       };
     }
