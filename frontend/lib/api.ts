@@ -27,47 +27,70 @@ function tokenForScope(scope: AuthScope): string | null {
   return scope === "admin" ? getAdminToken() : getUserToken();
 }
 
-function resolveApiBase(): string {
-  const envBase = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (envBase) {
-    const cleaned = envBase.replace(/\/$/, "");
+function isBrowserLocalHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+}
 
-    // On Vercel, backend is mounted under "/_/backend". If env points to
-    // same-origin root (e.g. "/" or "https://app.example.com"), coerce it.
-    if (typeof window !== "undefined") {
-      const host = window.location.hostname.toLowerCase();
-      const isLocalHost = host === "localhost" || host === "127.0.0.1";
-      if (!isLocalHost) {
-        if (cleaned === "" || cleaned === "/") return `${window.location.origin}/_/backend`;
+/** True if URL targets loopback — must not be used from a deployed site's browser. */
+function isLoopbackApiUrl(urlStr: string): boolean {
+  try {
+    const u = new URL(urlStr);
+    return isBrowserLocalHost(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * API origin for fetches. Resolved at call time (not module load) so the browser
+ * always sees `window`, and production never inherits SSR/build localhost.
+ */
+function getApiBase(): string {
+  const envBase = process.env.NEXT_PUBLIC_API_URL?.trim();
+
+  if (typeof window !== "undefined") {
+    const origin = window.location.origin;
+    const pageIsLocal = isBrowserLocalHost(window.location.hostname);
+
+    // Common mistake: Vercel env copies .env.example with http://localhost:4000 — breaks login in production.
+    if (!pageIsLocal && envBase && isLoopbackApiUrl(envBase)) {
+      return `${origin}/_/backend`;
+    }
+
+    if (envBase) {
+      const cleaned = envBase.replace(/\/$/, "");
+
+      if (!pageIsLocal) {
+        if (cleaned === "" || cleaned === "/") return `${origin}/_/backend`;
         if (cleaned.startsWith("/")) {
-          return cleaned.startsWith("/_/backend") ? cleaned : `${window.location.origin}/_/backend`;
+          return cleaned.startsWith("/_/backend") ? cleaned : `${origin}/_/backend`;
         }
         try {
           const parsed = new URL(cleaned);
-          const sameOrigin = parsed.origin === window.location.origin;
-          const hasBackendPrefix = parsed.pathname === "/_/backend" || parsed.pathname.startsWith("/_/backend/");
-          if (sameOrigin && !hasBackendPrefix) return `${window.location.origin}/_/backend`;
+          const sameOrigin = parsed.origin === origin;
+          const hasBackendPrefix =
+            parsed.pathname === "/_/backend" || parsed.pathname.startsWith("/_/backend/");
+          if (sameOrigin && !hasBackendPrefix) return `${origin}/_/backend`;
         } catch {
-          // Fall back to cleaned env value below.
+          // Fall back to cleaned below.
         }
       }
+
+      return cleaned;
     }
 
-    return cleaned;
+    if (!pageIsLocal) return `${origin}/_/backend`;
+    return "http://localhost:4000";
   }
 
-  // In deployed environments, call the co-hosted backend service route.
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname.toLowerCase();
-    const isLocalHost = host === "localhost" || host === "127.0.0.1";
-    if (!isLocalHost) return `${window.location.origin}/_/backend`;
+  // SSR / Node: no window — avoid localhost if a public site URL is configured
+  if (envBase) {
+    const cleaned = envBase.replace(/\/$/, "");
+    if (cleaned && !isLoopbackApiUrl(cleaned)) return cleaned;
   }
-
-  // Local development fallback.
   return "http://localhost:4000";
 }
-
-const API_BASE = resolveApiBase();
 
 /** Avoid refresh loop on auth endpoints. */
 function shouldAttemptRefresh(path: string): boolean {
@@ -91,7 +114,7 @@ async function refreshAccessToken(scope: AuthScope): Promise<boolean> {
 
   const job = (async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+      const res = await fetch(`${getApiBase()}/api/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken: rt }),
@@ -133,7 +156,7 @@ export async function api<T>(
   let res: Response;
   let retriedAfterRefresh = false;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...effectiveFetchOptions, headers });
+    res = await fetch(`${getApiBase()}${path}`, { ...effectiveFetchOptions, headers });
     if (
       res.status === 401 &&
       !retriedAfterRefresh &&
@@ -143,7 +166,7 @@ export async function api<T>(
       retriedAfterRefresh = true;
       const newTok = tokenForScope(requestScope);
       if (newTok) headers["Authorization"] = `Bearer ${newTok}`;
-      res = await fetch(`${API_BASE}${path}`, { ...effectiveFetchOptions, headers });
+      res = await fetch(`${getApiBase()}${path}`, { ...effectiveFetchOptions, headers });
     }
   } catch {
     // Network-level failure (no HTTP response).
