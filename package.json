@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
-    "prebuild": "cd frontend && npm ci",
+    "prebuild": "cd frontend && npm ci --include=dev",
     "start": "cd frontend && npm run start",
     "lint": "cd frontend && npm run lint"
   },
