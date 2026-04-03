@@ -52,13 +52,14 @@ export function subtractFromAssetBalance(amount: number): number {
   return next;
 }
 
-/** Format balance for display (e.g. "Rs 20,341.15" or "-Rs 20,341.15"). */
+/** Format balance for display (e.g. "Rs 20,341.15" or "Rs -20,341.15"). */
 export function formatAssetBalance(value?: number): string {
   const n = value ?? read();
-  const sign = n < 0 ? "-" : "";
+  if (!Number.isFinite(n)) return "Rs 0.00";
+  const neg = n < 0;
   const abs = Math.abs(n);
   const fixed = abs.toFixed(2);
-  const [int, dec] = fixed.split(".");
-  const withCommas = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${sign}Rs ${withCommas}.${dec}`;
+  const [intPart, dec] = fixed.split(".");
+  const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return neg ? `Rs -${withCommas}.${dec}` : `Rs ${withCommas}.${dec}`;
 }

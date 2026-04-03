@@ -2,11 +2,11 @@ import { User } from "../models/User.js";
 
 export async function getBalance(req, res) {
   try {
-    const balance = await User.getBalance(req.userId);
-    if (balance == null) {
+    const wallet = await User.getBalance(req.userId);
+    if (wallet == null) {
       return res.status(404).json({ error: "User not found" });
     }
-    res.json({ balance });
+    res.json(wallet);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to get balance" });
@@ -52,6 +52,14 @@ export async function completeTask(req, res) {
     if (!status) {
       return res.status(404).json({ error: "User not found", code: "NOT_FOUND" });
     }
+    if (status.code === "PRIME_ORDER_PENDING" || status.code === "PRIME_BLOCKED") {
+      return res.status(400).json({
+        message: status.error || "Insufficient balance. Please recharge.",
+        error: status.error || "Insufficient balance. Please recharge.",
+        code: "PRIME_BLOCKED",
+        status: status.status,
+      });
+    }
     if (status.code === "TASK_ASSIGNMENT_REQUIRED") {
       return res.status(403).json({
         error: "Check your activity track",
@@ -69,13 +77,6 @@ export async function completeTask(req, res) {
     if (status.code === "NOT_FOUND") {
       return res.status(404).json({ error: "User not found", code: "NOT_FOUND" });
     }
-    if (status.code === "PRIME_ORDER_PENDING") {
-      return res.status(403).json({
-        error: status.error || "Insufficient balance. Please recharge.",
-        code: "PRIME_ORDER_PENDING",
-        status: status.status,
-      });
-    }
     res.json(status);
   } catch (err) {
     console.error(err);
@@ -89,6 +90,15 @@ export async function openTask(req, res) {
     if (!result) {
       return res.status(404).json({ error: "User not found", code: "NOT_FOUND" });
     }
+    if (result.code === "PRIME_ORDER_PENDING" || result.code === "PRIME_BLOCKED") {
+      return res.status(400).json({
+        message: result.error || "Insufficient balance. Please recharge.",
+        error: result.error || "Insufficient balance. Please recharge.",
+        code: "PRIME_BLOCKED",
+        status: result.status,
+        activity: result.activity,
+      });
+    }
     if (result.code === "TASK_ASSIGNMENT_REQUIRED") {
       return res.status(403).json({
         ...result,
@@ -101,9 +111,6 @@ export async function openTask(req, res) {
         code: "INSUFFICIENT_BALANCE",
         status: result.status,
       });
-    }
-    if (result.code === "PRIME_ORDER_PENDING") {
-      return res.status(409).json(result);
     }
     res.json(result);
   } catch (err) {
@@ -119,5 +126,16 @@ export async function getTaskActivities(req, res) {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch task activities" });
+  }
+}
+
+export async function postActivityLog(req, res) {
+  try {
+    const message = req.body?.message;
+    await User.appendActivityLog(req.userId, message);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: err.message || "Failed to add activity" });
   }
 }

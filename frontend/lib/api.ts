@@ -117,16 +117,23 @@ export async function api<T>(
 ): Promise<{ data?: T; error?: string; status: number }> {
   const requestScope = authScopeForRequest(path);
   const { token = tokenForScope(requestScope), suppressAuthRedirect = false, ...fetchOptions } = options;
+  const method = String(fetchOptions.method || "GET").toUpperCase();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((fetchOptions.headers as Record<string, string>) || {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
+  // Prevent stale admin/user balances due to intermediary/browser caching.
+  const effectiveFetchOptions: RequestInit = {
+    ...fetchOptions,
+    cache: fetchOptions.cache ?? (method === "GET" ? "no-store" : undefined),
+  };
+
   let res: Response;
   let retriedAfterRefresh = false;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
+    res = await fetch(`${API_BASE}${path}`, { ...effectiveFetchOptions, headers });
     if (
       res.status === 401 &&
       !retriedAfterRefresh &&
@@ -136,7 +143,7 @@ export async function api<T>(
       retriedAfterRefresh = true;
       const newTok = tokenForScope(requestScope);
       if (newTok) headers["Authorization"] = `Bearer ${newTok}`;
-      res = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
+      res = await fetch(`${API_BASE}${path}`, { ...effectiveFetchOptions, headers });
     }
   } catch {
     // Network-level failure (no HTTP response).
@@ -274,7 +281,8 @@ export type AdminUserRow = {
   task_assignment_requested_at?: string | null;
   task_assignment_granted_at?: string | null;
   prime_order_slots?: number[];
-  prime_negative_amount?: number;
+  /** Per-task prime rules (server-driven). */
+  prime_orders?: { task_no: number; negative_amount: number; is_completed: boolean }[];
 };
 
 export type AdminAdminRow = {
@@ -368,10 +376,26 @@ export const adminApi = {
       method: "PATCH",
     });
   },
+  /** Assign 30-task cycle with per-task prime recharge amounts (replaces assign + prime configure). */
+  assignTasksWithPrime(
+    id: string,
+    primeOrders: { task_no: number; negative_amount: number }[],
+  ) {
+    return api<{ message: string; status: UserTaskStatus }>(`/api/admin/users/${id}/tasks/assign-with-prime`, {
+      method: "PATCH",
+      body: JSON.stringify({ primeOrders }),
+    });
+  },
   assignPrimeOrders(id: string, slots: number[], opts?: { noNegative?: boolean; negativeAmount?: number }) {
     return api<{ message: string; userId: string; slots: number[] }>(`/api/admin/users/${id}/tasks/prime`, {
       method: "PATCH",
       body: JSON.stringify({ slots, ...(opts ?? {}) }),
+    });
+  },
+  assignSinglePrimeOrder(id: string, primeOrders: { task_no: number; negative_amount: number }[]) {
+    return api<{ message: string; status: UserTaskStatus }>(`/api/admin/users/${id}/assign-prime-order`, {
+      method: "POST",
+      body: JSON.stringify({ prime_orders: primeOrders }),
     });
   },
 };
@@ -383,10 +407,19 @@ export type UserTaskStatus = {
   remaining: number;
   requiresAdminAssignment: boolean;
   canPerformTasks: boolean;
+  /** Next/current task in cycle (from server). */
+  currentTaskNo?: number;
+  /** Wallet balance from server (same source of truth as prime checks). */
+  balance?: number;
+  /** Exactly one active prime at a time (or null/undefined when none). */
+  activePrime?: { task_no: number; negative_amount: number; is_completed: boolean } | null;
+  primeOrders?: { task_no: number; negative_amount: number; is_completed: boolean }[];
   nextAutoAssignAt: string | null;
   taskAssignmentRequestedAt?: string | null;
   taskAssignmentGrantedAt?: string | null;
   primeNegativeAmount?: number;
+  /** Deterministic Grab Order product while this prime task is active (matches open task when created). */
+  primeGrabProduct?: { image: string; title: string } | null;
   /** When true, prime order UI may show order quantity / reserve impact as negative (admin set a recharge amount). */
   primeShowNegative?: boolean;
   /** True after admin saves a positive "Amount to add (runtime)" for this user. */
@@ -396,6 +429,18 @@ export type UserTaskStatus = {
   hasReceivedFirstTasks?: boolean;
   firstTasksCompleted?: number;
   firstTasksRemaining?: number;
+  commissionTier?: number;
+  /** Report totals: first incomplete prime liability applied; protected reserve forced to 0. */
+  total_capital?: number;
+  totalCapital?: number;
+  instant_profit?: number;
+  instantProfit?: number;
+  protected_reserve?: number;
+  protectedReserve?: number;
+  campaign_wallet?: number;
+  campaignWallet?: number;
+  initialReserveConsumed?: boolean;
+  lastPositiveDepositAt?: string | null;
   reportProgress?: {
     lastTaskNo: number;
     lastAmount: number;
@@ -415,6 +460,10 @@ export type UserTaskActivityEntry = {
   status: "pending" | "completed";
   taskNo?: number;
   isPrime?: boolean;
+  message?: string | null;
+  activityType?: "task" | "log";
+  taskImage?: string | null;
+  taskTitle?: string | null;
 };
 
 export type UserOpenTaskResult = {
@@ -429,8 +478,9 @@ export type UserOpenTaskResult = {
     rewards: number;
     isPrime: boolean;
   };
-  code?: "PRIME_ORDER_PENDING" | "TASK_ASSIGNMENT_REQUIRED" | "INSUFFICIENT_BALANCE" | "NOT_FOUND";
+  code?: "PRIME_ORDER_PENDING" | "PRIME_BLOCKED" | "TASK_ASSIGNMENT_REQUIRED" | "INSUFFICIENT_BALANCE" | "NOT_FOUND";
   error?: string;
+  message?: string;
 };
 
 /** User balance (requires auth). Uses token from localStorage by default. */
@@ -438,7 +488,24 @@ export const userApi = {
   getBalance() {
     // Balance checks are often background refreshes (focus/navigation).
     // Do not force logout/redirect on a single 401 from this endpoint.
-    return api<{ balance: number }>("/api/user/balance", { suppressAuthRedirect: true });
+    return api<{
+      balance: number;
+      capital: number;
+      negativeAmountTotal: number;
+      totalCommissions: number;
+      total_capital: number;
+      totalCapital: number;
+      instant_profit: number;
+      instantProfit: number;
+      protected_reserve: number;
+      protectedReserve: number;
+      campaign_wallet: number;
+      campaignWallet: number;
+      hasAnyPrimeAssigned: boolean;
+      commissionTier?: number;
+      initialReserveConsumed?: boolean;
+      lastPositiveDepositAt?: string | null;
+    }>("/api/user/balance", { suppressAuthRedirect: true });
   },
   deposit(amount: number) {
     return api<{ balance: number; message: string }>("/api/user/deposit", {
@@ -462,6 +529,13 @@ export const userApi = {
     return api<UserTaskStatus>("/api/user/tasks/complete", {
       method: "POST",
       body: JSON.stringify(activityId ? { activityId } : {}),
+      suppressAuthRedirect: true,
+    });
+  },
+  addActivityLog(body: { message: string }) {
+    return api<{ ok: boolean }>("/api/user/activity-log", {
+      method: "POST",
+      body: JSON.stringify(body),
       suppressAuthRedirect: true,
     });
   },

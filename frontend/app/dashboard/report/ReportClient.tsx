@@ -9,6 +9,7 @@ import {
   getTitleFromImageName,
   type Task,
 } from "./data/tasks";
+import { setAssetBalance } from "@/lib/asset-balance-store";
 import { useAssetBalance } from "@/lib/use-asset-balance";
 import {
   userApi,
@@ -28,9 +29,13 @@ type ActivityEntry = {
   createdAt: Date;
   status: ActivityStatus;
   isPrime?: boolean;
+  taskNo?: number;
+  message?: string | null;
+  activityType?: "task" | "log" | "prime_notice";
+  /** Server payload.task.image — stable for prime until complete */
+  taskImage?: string | null;
+  taskTitle?: string | null;
 };
-
-const INITIAL_PROTECTED_RESERVE = 20000;
 
 function buildCompletedNotifications(
   entries: ActivityEntry[],
@@ -47,10 +52,14 @@ function buildCompletedNotifications(
     const latest = chunk[0];
     const totalQuantity = chunk.reduce((sum, entry) => sum + entry.quantityRs, 0);
     const totalCommission = chunk.reduce((sum, entry) => sum + entry.commissionRs, 0);
+    const batchRef =
+      latest.orderNumber && String(latest.orderNumber).trim().length > 0
+        ? latest.orderNumber
+        : String(latest.id).slice(0, 12);
     notifications.push({
       id: `completed-summary-${latest.id}-${chunk.length}`,
       title: `${cycleSize} Tasks Completed Report`,
-      orderNumber: `BATCH-${latest.orderNumber}`,
+      orderNumber: `BATCH-${batchRef}`,
       quantityRs: totalQuantity,
       commissionRs: totalCommission,
       createdAt: latest.createdAt,
@@ -128,34 +137,183 @@ function ModalShell({
   );
 }
 
+function pickPrimeGrabProduct(): { image: string; title: string } {
+  const image = getNextTaskImage();
+  return { image, title: getTitleFromImageName(image) };
+}
+
+/** Server-first: pending prime row image, then status.primeGrabProduct, then random (legacy fallback). */
+async function fetchPrimeGrabDisplay(
+  currentTaskNo: number,
+  setStatus: (s: UserTaskStatus | null) => void,
+): Promise<{ image: string; title: string }> {
+  const ct = Math.max(0, Number(currentTaskNo) || 0);
+  const [stRes, actRes] = await Promise.all([userApi.getTaskStatus(), userApi.getTaskActivity()]);
+  if (stRes.data) setStatus(stRes.data);
+  const st = stRes.data;
+  const entries = actRes.data?.entries ?? [];
+  const pending = entries.find(
+    (e) =>
+      e.status === "pending" &&
+      e.isPrime &&
+      (e.taskNo == null || Number(e.taskNo) === ct),
+  );
+  if (pending?.taskImage) {
+    return {
+      image: pending.taskImage,
+      title:
+        (pending.taskTitle && String(pending.taskTitle)) ||
+        pending.title ||
+        getTitleFromImageName(pending.taskImage),
+    };
+  }
+  const pg = st?.primeGrabProduct;
+  if (pg?.image) {
+    return { image: pg.image, title: pg.title || getTitleFromImageName(pg.image) };
+  }
+  return pickPrimeGrabProduct();
+}
+
+/** Grab Order style (confetti, success mark, COMBO ribbon, Book Now) — prime block & congrats use the same UI. */
+function GrabOrderPrimeModalBody({
+  product,
+  onClose,
+  onBookNow,
+}: {
+  product: { image: string; title: string } | null;
+  onClose: () => void;
+  onBookNow: () => void;
+}) {
+  return (
+    <>
+      <div className="relative border-b border-slate-200 px-4 pt-3 pb-4">
+        <h2 className="text-center text-base font-semibold text-slate-900">Grab Order</h2>
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-3 top-1/2 h-8 w-8 -translate-y-1/2 rounded-full text-slate-500 hover:bg-slate-100 grid place-items-center"
+          aria-label="Close"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="relative overflow-hidden px-5 pb-6 pt-4 text-center">
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-52 overflow-hidden"
+          aria-hidden
+        >
+          {Array.from({ length: 36 }, (_, i) => {
+            const colors = [
+              "bg-amber-400/70",
+              "bg-yellow-300/80",
+              "bg-amber-500/60",
+              "bg-orange-300/70",
+            ];
+            return (
+              <span
+                key={i}
+                className={`absolute h-1.5 w-2 rounded-[1px] ${colors[i % colors.length]}`}
+                style={{
+                  left: `${(i * 17 + (i % 7) * 11) % 100}%`,
+                  top: `${(i * 13) % 55}%`,
+                  transform: `rotate(${i * 23}deg)`,
+                }}
+              />
+            );
+          })}
+        </div>
+        <div className="relative z-[1] space-y-4">
+          <div className="mx-auto flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-emerald-500 shadow-sm">
+            <svg
+              viewBox="0 0 24 24"
+              className="h-9 w-9 text-white"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              aria-hidden
+            >
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+          </div>
+          <p className="text-2xl font-bold text-slate-900">Congratulations!!</p>
+          <p className="text-base font-bold text-slate-900">
+            You have received an exclusive booking.
+          </p>
+          <p className="text-sm leading-relaxed text-slate-500">
+            You&apos;ve got the prime order x5 commission, please contact customer service to get more
+            details!
+          </p>
+          {product ? (
+            <div className="mx-auto w-full max-w-[220px] space-y-2 pt-1">
+              <div className="relative mx-auto aspect-square w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                <span className="absolute left-0 top-0 z-10 inline-block origin-top-left -translate-x-0.5 translate-y-3 rotate-[-40deg] whitespace-nowrap bg-red-600 px-4 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow">
+                  COMBO
+                </span>
+                <Image
+                  src={product.image}
+                  alt={product.title}
+                  fill
+                  className="object-cover"
+                  sizes="220px"
+                />
+              </div>
+              <p className="text-sm font-medium text-slate-600">{product.title}</p>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={onBookNow}
+            className="mt-2 w-full rounded-lg bg-sky-600 py-3 text-sm font-semibold text-white shadow hover:bg-sky-700"
+          >
+            Book Now
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Always shows explicit sign for negatives: e.g. Rs -20,000.00 */
 function currencyRs(n: number): string {
-  const fixed = n.toFixed(2);
-  const [int, dec] = fixed.split(".");
-  const withCommas = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `Rs ${withCommas}.${dec}`;
+  const raw = Number(n);
+  if (!Number.isFinite(raw)) return "Rs 0.00";
+  const neg = raw < 0;
+  const abs = Math.abs(raw);
+  const fixed = abs.toFixed(2);
+  const [intPart, dec] = fixed.split(".");
+  const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return neg ? `Rs -${withCommas}.${dec}` : `Rs ${withCommas}.${dec}`;
 }
 
-/** Formats a signed currency for prime reserve deltas (negative = admin recharge requirement). */
+/** Formats a signed currency for deltas (negative uses same Rs -X style). */
 function currencyRsSigned(n: number): string {
-  const sign = n < 0 ? "-" : n > 0 ? "+" : "";
-  const core = currencyRs(Math.abs(n)).replace(/^Rs /, "");
-  return sign ? `${sign}Rs ${core}` : `Rs ${core}`;
+  const raw = Number(n);
+  if (!Number.isFinite(raw) || raw === 0) return currencyRs(0);
+  if (raw < 0) return currencyRs(raw);
+  return `+${currencyRs(raw)}`;
 }
 
-/** Toast when prime blocks flow; reserve/total only change when a prime negative amount is set on the user. */
-function primeBlockedToastMessage(primeNegativeAmount: number): string {
-  return primeNegativeAmount > 0
-    ? "Insufficient balance, please recharge and try again"
-    : "Your balance is insufficient please recharge";
+/** Toast when prime blocks flow (server: PRIME_BLOCKED). */
+function primeBlockedToastMessage(): string {
+  return "Your balance is insufficient please recharge";
 }
 
 const INSUFFICIENT_BALANCE_RECHARGE_TOAST = "Insufficient balance. Please recharge.";
+
+/** Shown when balance is negative and user taps a pending task in Activity Track (matches product copy). */
+const NEGATIVE_BALANCE_ACTIVITY_TOAST =
+  "Insufficient balance, please recharge and try again";
 
 const ACTIVITY_TRACK_TOAST = "check your acitivty track";
 
 function showRechargeToast(setToast: (m: string) => void) {
   setToast(INSUFFICIENT_BALANCE_RECHARGE_TOAST);
   window.setTimeout(() => setToast(""), 2200);
+}
+
+function showNegativeBalanceActivityToast(setToast: (m: string) => void) {
+  setToast(NEGATIVE_BALANCE_ACTIVITY_TOAST);
+  window.setTimeout(() => setToast(""), 2800);
 }
 
 function showActivityTrackToast(setToast: (m: string) => void) {
@@ -217,11 +375,7 @@ export function ReportClient() {
     }
   }
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
-  const {
-    formatted: assetBalanceFormatted,
-    balance: assetBalance,
-    refetch: refetchAssetBalance,
-  } = useAssetBalance();
+  const { balance: assetBalance, refetch: refetchAssetBalance } = useAssetBalance();
   const [instantProfit, setInstantProfit] = useState(0);
   const [completedInCycle, setCompletedInCycle] = useState(0);
   const [activeTask, setActiveTask] = useState<Task>(() => createRandomTask(1));
@@ -249,6 +403,8 @@ export function ReportClient() {
   const [activityPendingHiddenUntilAdmin, setActivityPendingHiddenUntilAdmin] = useState(() =>
     readHidePendingFromSession(hidePendingActivityKey),
   );
+  /** Shown after user taps Continue on Random Hidden Reward (30/30); cleared when admin assigns next cycle. */
+  const [showWaitForAdminAfterGiftContinue, setShowWaitForAdminAfterGiftContinue] = useState(false);
 
   const setActivityPendingHiddenUntilAdminPersisted = (next: boolean) => {
     setActivityPendingHiddenUntilAdmin(next);
@@ -262,9 +418,26 @@ export function ReportClient() {
   };
   const [failedMessage, setFailedMessage] = useState("check your activity track");
   const [toastMessage, setToastMessage] = useState("");
+  const [toastHint, setToastHint] = useState("");
   const [isPrimeCongratsOpen, setIsPrimeCongratsOpen] = useState(false);
+  const [isPrimeBlockModalOpen, setIsPrimeBlockModalOpen] = useState(false);
+  const [primeBlockProduct, setPrimeBlockProduct] = useState<{
+    image: string;
+    title: string;
+  } | null>(null);
   const [primeReward, setPrimeReward] = useState<{ image: string; title: string } | null>(null);
   const [lastPrimeNoticeId, setLastPrimeNoticeId] = useState<string | null>(null);
+  const [walletSnapshot, setWalletSnapshot] = useState({
+    capital: 0,
+    totalCapital: 0,
+    negativeAmountTotal: 0,
+    totalCommissions: 0,
+    campaignWallet: 0,
+    hasAnyPrimeAssigned: false,
+    protectedReserve: 0,
+    initialReserveConsumed: false,
+    lastPositiveDepositAt: null as string | null,
+  });
 
   const total = TOTAL_TASKS;
   const safeIndex = ((currentTaskIndex % total) + total) % total;
@@ -274,31 +447,116 @@ export function ReportClient() {
     !taskStatus.canPerformTasks &&
     Boolean(taskStatus.requiresAdminAssignment);
 
+  /**
+   * Raw DB wallet balance — same source as prime recharge checks and task completion rules.
+   */
+  const rawWalletBalance = useMemo(() => {
+    if (
+      taskStatus != null &&
+      taskStatus.balance != null &&
+      Number.isFinite(Number(taskStatus.balance))
+    ) {
+      return Number(taskStatus.balance);
+    }
+    return Number.isFinite(assetBalance) ? assetBalance : 0;
+  }, [taskStatus, assetBalance]);
+
+  /** Total capital from API: balance minus liability of first incomplete prime only (may be negative). */
+  const totalCapitalDisplay = useMemo(() => {
+    const t =
+      taskStatus?.totalCapital ??
+      taskStatus?.total_capital ??
+      walletSnapshot.totalCapital;
+    if (t != null && Number.isFinite(Number(t))) return Number(t);
+    return rawWalletBalance;
+  }, [taskStatus, walletSnapshot.totalCapital, rawWalletBalance]);
+
+  const reportCampaignWallet = useMemo(() => {
+    const w =
+      taskStatus?.campaignWallet ??
+      taskStatus?.campaign_wallet ??
+      walletSnapshot.campaignWallet;
+    if (w != null && Number.isFinite(Number(w))) return Number(w);
+    return 0;
+  }, [taskStatus, walletSnapshot.campaignWallet]);
+
+  /** Cosmetic only: server shows placeholder until first negative exposure, then 0 permanently. */
+  const protectedReserveDisplay = useMemo(() => {
+    if (taskStatus) {
+      const v = Number(taskStatus.protectedReserve ?? taskStatus.protected_reserve ?? NaN);
+      if (Number.isFinite(v)) return v;
+    }
+    return walletSnapshot.protectedReserve;
+  }, [taskStatus, walletSnapshot.protectedReserve]);
+
+  /** Server truth: current cycle task vs prime_orders — must run before generic "activity track" blocking. */
+  const primeRechargeShortfall = useMemo(() => {
+    const prime = taskStatus?.activePrime ?? null;
+    const required = Math.abs(Number(prime?.negative_amount ?? 0) || 0);
+    return Boolean(prime && required > 0 && rawWalletBalance < required);
+  }, [taskStatus, rawWalletBalance]);
+
   /** Hide pending-style rows while waiting for admin (incl. after gift) or when post-gift flag is set. */
   const suppressPendingInActivity =
     awaitingAdminOnly || activityPendingHiddenUntilAdmin || waitingForAdminReassign;
 
   const progressLabel = useMemo(() => {
-    if (awaitingAdminOnly) return "Cycle complete — wait for admin";
+    if (awaitingAdminOnly || showWaitForAdminAfterGiftContinue) {
+      return "Wait for admin for the next cycle";
+    }
     return `Task ${safeIndex + 1} / ${total}`;
-  }, [awaitingAdminOnly, safeIndex, total]);
-  /** Negative account balance (admin runtime): show wallet as zero; block task/activity actions. */
-  const accountBalanceInsufficient = assetBalance < 0;
+  }, [awaitingAdminOnly, showWaitForAdminAfterGiftContinue, safeIndex, total]);
+  /** Negative account balance (admin runtime): block task/activity actions. */
+  const accountBalanceInsufficient = rawWalletBalance < 0;
 
-  const campaignWallet = useMemo(() => {
-    if (accountBalanceInsufficient) return 0;
-    return assetBalance;
-  }, [assetBalance, accountBalanceInsufficient]);
-  const pendingPrimeEntry = useMemo(() => {
-    if (suppressPendingInActivity) return null;
-    return activityEntries.find((entry) => entry.status === "pending" && Boolean(entry.isPrime)) || null;
-  }, [activityEntries, suppressPendingInActivity]);
-  const hasPrimeOrderLock = Boolean(pendingPrimeEntry);
+  /**
+   * Prime blocked before `user_tasks` open row exists — nothing from GET activity. Inject a card so
+   * Activity Track still lists Prime Order (negative balance or recharge shortfall).
+   */
+  const virtualPrimeActivityEntry = useMemo((): ActivityEntry | null => {
+    if (!taskStatus?.activePrime) return null;
+    const ap = taskStatus.activePrime;
+    const ct = Math.max(0, Number(taskStatus.currentTaskNo ?? 0) || 0);
+    if (ct <= 0 || Number(ap.task_no) !== ct) return null;
+    const required = Math.max(0, Math.abs(Number(ap.negative_amount ?? 0) || 0));
+    if (required <= 0) return null;
+    const hasServerPendingPrime = activityEntries.some(
+      (e) =>
+        e.status === "pending" &&
+        Boolean(e.isPrime) &&
+        (e.taskNo == null || Number(e.taskNo) === ct),
+    );
+    if (hasServerPendingPrime) return null;
+    const bal = rawWalletBalance;
+    const shortfall = !Number.isFinite(bal) || bal < required;
+    const negative = Number.isFinite(bal) && bal < 0;
+    if (!shortfall && !negative) return null;
+    const pg = taskStatus.primeGrabProduct;
+    const uid = authUser?.id ?? "guest";
+    return {
+      id: `prime-notice-virtual-${uid}-${ct}`,
+      title: "Prime Order",
+      orderNumber: `Prime task #${ct} • 5x commission`,
+      quantityRs: required,
+      commissionRs: 0,
+      createdAt: new Date(),
+      status: "pending",
+      isPrime: true,
+      activityType: "prime_notice",
+      taskNo: ct,
+      taskImage: pg?.image ?? null,
+      taskTitle: pg?.title ?? null,
+      message: null,
+    };
+  }, [taskStatus, activityEntries, rawWalletBalance, authUser?.id]);
+
+  /** Always detect server prime pending task (even when other pending rows are suppressed). */
+  const pendingPrimeEntry = useMemo(
+    () => activityEntries.find((entry) => entry.status === "pending" && Boolean(entry.isPrime)) || null,
+    [activityEntries],
+  );
+  const hasPrimeOrderLock = Boolean(pendingPrimeEntry) || Boolean(virtualPrimeActivityEntry);
   const primeNegativeAmount = Math.max(0, Number(taskStatus?.primeNegativeAmount ?? 0) || 0);
-  /** Reserve/total-capital deduction and recharge UX only apply once the user has reached the prime slot (pending prime row in activity). */
-  const primeFinancialsActive = primeNegativeAmount > 0 && hasPrimeOrderLock;
-  const showPrimeRechargeNotice =
-    primeFinancialsActive && assetBalance < primeNegativeAmount;
   /**
    * Prime "Continue" is locked while a pending prime order exists and the admin required a recharge
    * amount that the user's balance has not yet met (matches API PRIME_ORDER_PENDING).
@@ -306,41 +564,14 @@ export function ReportClient() {
   const isPrimeContinueLocked =
     hasPrimeOrderLock &&
     primeNegativeAmount > 0 &&
-    assetBalance < primeNegativeAmount;
+    rawWalletBalance < primeNegativeAmount;
 
-  /**
-   * Protected reserve and Total Capital show the prime deduction only while the user is on the
-   * assigned prime order (pending prime in activity), not on earlier tasks in the cycle.
-   */
-  const protectedReserveDisplay = useMemo(() => {
-    if (accountBalanceInsufficient) {
-      return { total: 0 };
-    }
-    const base = INITIAL_PROTECTED_RESERVE;
-    if (primeFinancialsActive) {
-      return { total: base - primeNegativeAmount };
-    }
-    return { total: base };
-  }, [accountBalanceInsufficient, primeFinancialsActive, primeNegativeAmount]);
-
-  /**
-   * While prime recharge is required and balance is short, Total Capital shows the combined liability:
-   * -(protected reserve nominal + admin negative amount), e.g. -(20000 + 15000) = -35000.
-   * Once balance meets the requirement, net reserve (reserve − required) is used as before.
-   */
-  const totalCapitalDisplay = useMemo(() => {
-    if (accountBalanceInsufficient) {
-      return { mode: "balance" as const, value: assetBalance };
-    }
-    if (primeFinancialsActive) {
-      const shortfall = assetBalance < primeNegativeAmount;
-      const value = shortfall
-        ? -(INITIAL_PROTECTED_RESERVE + primeNegativeAmount)
-        : INITIAL_PROTECTED_RESERVE - primeNegativeAmount;
-      return { mode: "prime_adjusted" as const, value };
-    }
-    return { mode: "balance" as const, value: assetBalance };
-  }, [accountBalanceInsufficient, primeFinancialsActive, primeNegativeAmount, assetBalance]);
+  const isWithin24hOfDeposit = useMemo(() => {
+    const depositAt = walletSnapshot.lastPositiveDepositAt;
+    if (!depositAt) return false;
+    const diff = Date.now() - new Date(depositAt).getTime();
+    return diff < 24 * 60 * 60 * 1000;
+  }, [walletSnapshot.lastPositiveDepositAt]);
   const currentTitle = getTitleFromImageName(activeTask.image);
   const isAdminAssignedCyclePending =
     Boolean(taskStatus?.taskAssignmentGrantedAt) &&
@@ -364,7 +595,12 @@ export function ReportClient() {
         if (!hasHydratedProgress) {
           const progress = res.data.reportProgress;
           const lastTaskNo = Math.max(0, Number(progress?.lastTaskNo ?? 0) || 0);
-          const cycleProfit = Math.max(0, Number(progress?.cycleInstantProfit ?? 0) || 0);
+          const cycleProfit = Number(
+            res.data.instantProfit ??
+              res.data.instant_profit ??
+              progress?.cycleInstantProfit ??
+              0,
+          );
           const quotaUsed = Math.max(0, Number(res.data.quotaUsed ?? 0) || 0);
           const firstDone = Math.max(0, Number(res.data.firstTasksCompleted ?? 0) || 0);
           const inFirstTimeBonus = firstDone < total;
@@ -379,24 +615,46 @@ export function ReportClient() {
             setCurrentTaskIndex(mod);
             setCompletedInCycle(mod);
           }
-          setInstantProfit(cycleProfit);
+          setInstantProfit(Number.isFinite(cycleProfit) ? cycleProfit : 0);
           setHasHydratedProgress(true);
         }
         const grantedAt = res.data.taskAssignmentGrantedAt ?? null;
         if (grantedAt && grantedAt !== lastAssignmentGrantAt) {
-          const hadPreviousGrant = lastAssignmentGrantAt !== null;
           setLastAssignmentGrantAt(grantedAt);
           setAdminAssignReceiptDone(false);
           setCompletedInCycle(0);
           setCurrentTaskIndex(0);
           setWaitingForAdminReassign(false);
-          if (hadPreviousGrant) {
-            setActivityPendingHiddenUntilAdminPersisted(false);
-          }
+          setActivityPendingHiddenUntilAdminPersisted(false);
+          setShowWaitForAdminAfterGiftContinue(false);
         }
         if (res.data.canPerformTasks && !res.data.requiresAdminAssignment) {
           setActivityPendingHiddenUntilAdminPersisted(false);
+          setShowWaitForAdminAfterGiftContinue(false);
         }
+      }
+      return res;
+    });
+
+  const refreshWallet = () =>
+    userApi.getBalance().then((res) => {
+      if (res.error || !res.data) return res;
+      const raw = Number(res.data.balance);
+      if (Number.isFinite(raw)) setAssetBalance(raw);
+      setWalletSnapshot({
+        capital: Number(res.data.capital ?? res.data.balance ?? 0) || 0,
+        totalCapital: Number(res.data.totalCapital ?? res.data.total_capital ?? 0) || 0,
+        negativeAmountTotal: Number(res.data.negativeAmountTotal ?? 0) || 0,
+        totalCommissions: Number(res.data.totalCommissions ?? 0) || 0,
+        campaignWallet: Number(res.data.campaignWallet ?? res.data.campaign_wallet ?? 0) || 0,
+        hasAnyPrimeAssigned: Boolean(res.data.hasAnyPrimeAssigned),
+        protectedReserve: Number(res.data.protectedReserve ?? res.data.protected_reserve ?? 0) || 0,
+        initialReserveConsumed: Boolean(res.data.initialReserveConsumed),
+        lastPositiveDepositAt: res.data.lastPositiveDepositAt ?? null,
+      });
+      const ip = res.data.instantProfit ?? res.data.instant_profit;
+      if (ip != null && Number.isFinite(Number(ip))) {
+        setInstantProfit(Number(ip));
       }
       return res;
     });
@@ -429,6 +687,11 @@ export function ReportClient() {
         createdAt: new Date(e.createdAt),
         status: e.status,
         isPrime: Boolean(e.isPrime),
+        taskNo: e.taskNo != null ? Number(e.taskNo) : undefined,
+        message: e.message ?? null,
+        activityType: e.activityType ?? "task",
+        taskImage: e.taskImage ?? null,
+        taskTitle: e.taskTitle ?? null,
       }));
       setActivityEntries(mapped);
       if (typeof window !== "undefined") {
@@ -441,12 +704,36 @@ export function ReportClient() {
       return mapped;
     });
 
-  const hasPendingPrimeOrder = (entries: ActivityEntry[]) =>
-    entries.some((entry) => entry.status === "pending" && Boolean(entry.isPrime));
-
   useEffect(() => {
     void refreshTaskStatus();
+    void refreshWallet();
     void loadTaskActivity();
+  }, []);
+
+  const syncOnFocusRef = useRef({
+    refreshTaskStatus,
+    loadTaskActivity,
+    refreshWallet,
+  });
+  syncOnFocusRef.current = { refreshTaskStatus, loadTaskActivity, refreshWallet };
+
+  useEffect(() => {
+    const sync = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      const { refreshTaskStatus: r, loadTaskActivity: l, refreshWallet: w } =
+        syncOnFocusRef.current;
+      void r();
+      void l();
+      void w();
+    };
+    window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
+    };
   }, []);
 
   useEffect(() => {
@@ -462,7 +749,6 @@ export function ReportClient() {
 
   useEffect(() => {
     if (!accountBalanceInsufficient) return;
-    setIsActivityModalOpen(false);
     setIsTaskModalOpen(false);
     setIsSuccessModalOpen(false);
   }, [accountBalanceInsufficient]);
@@ -493,33 +779,65 @@ export function ReportClient() {
   useEffect(() => {
     if (!pendingPrimeEntry?.id) return;
     if (pendingPrimeEntry.id === lastPrimeNoticeId) return;
+    if (primeRechargeShortfall) return;
     setLastPrimeNoticeId(pendingPrimeEntry.id);
-    const img = getNextTaskImage();
-    setPrimeReward({ image: img, title: getTitleFromImageName(img) });
+    const img =
+      pendingPrimeEntry.taskImage && pendingPrimeEntry.taskImage.length > 0
+        ? pendingPrimeEntry.taskImage
+        : getNextTaskImage();
+    const title =
+      (pendingPrimeEntry.taskTitle && String(pendingPrimeEntry.taskTitle)) ||
+      pendingPrimeEntry.title ||
+      getTitleFromImageName(img);
+    setPrimeReward({ image: img, title });
     setIsPrimeCongratsOpen(true);
-  }, [pendingPrimeEntry?.id, lastPrimeNoticeId]);
+  }, [pendingPrimeEntry?.id, lastPrimeNoticeId, primeRechargeShortfall]);
 
   const openTaskModal = () => {
+    if (
+      awaitingAdminOnly ||
+      waitingForAdminReassign ||
+      showWaitForAdminAfterGiftContinue
+    ) {
+      return;
+    }
     if (accountBalanceInsufficient) {
       showRechargeToast(setToastMessage);
       return;
     }
-    if (isAdminAssignedCyclePending) {
+    const ct = Math.max(0, Number(taskStatus?.currentTaskNo ?? 0) || 0);
+    const prime = taskStatus?.activePrime ?? null;
+    const bal = Number(taskStatus?.balance != null ? taskStatus.balance : assetBalance);
+    const required = Math.abs(Number(prime?.negative_amount ?? 0) || 0);
+
+    if (prime && required > 0 && bal < required) {
+      void fetchPrimeGrabDisplay(ct, setTaskStatus).then((product) => {
+        setPrimeBlockProduct(product);
+        setIsPrimeBlockModalOpen(true);
+      });
+      const key = `fp_prime_pending_logged_${authUser?.id ?? "guest"}_${ct}`;
+      if (typeof window !== "undefined" && !sessionStorage.getItem(key)) {
+        void userApi.addActivityLog({ message: "Prime order (5x) available but pending" }).then((res) => {
+          if (!res.error) {
+            try {
+              sessionStorage.setItem(key, "1");
+            } catch {
+              // ignore
+            }
+            void loadTaskActivity();
+          }
+        });
+      }
+      return;
+    }
+
+    if (!prime && isAdminAssignedCyclePending) {
       setFailedMessage("check your acitivty track");
       setIsFailedModalOpen(true);
       return;
     }
-    if (taskStatus && !taskStatus.canPerformTasks) {
-      const shortfall =
-        hasPrimeOrderLock &&
-        primeNegativeAmount > 0 &&
-        assetBalance < primeNegativeAmount &&
-        !taskStatus.requiresAdminAssignment;
-      setFailedMessage(
-        shortfall
-          ? "Insufficient balance for the prime order — recharge before continuing tasks."
-          : "check your activity track",
-      );
+    if (taskStatus && !taskStatus.canPerformTasks && !primeRechargeShortfall) {
+      setFailedMessage("check your activity track");
       setIsFailedModalOpen(true);
       return;
     }
@@ -538,26 +856,29 @@ export function ReportClient() {
         })();
         return;
       }
-      if (res.error && res.data?.code === "PRIME_ORDER_PENDING") {
+      const errCode = (res.data as { code?: string } | undefined)?.code;
+      if (res.error && (errCode === "PRIME_BLOCKED" || errCode === "PRIME_ORDER_PENDING")) {
         const body = res.data as UserOpenTaskResult;
-        const run = async () => {
-          let pn = Math.max(0, Number(body.status?.primeNegativeAmount ?? 0) || 0);
-          if (body.status) {
-            setTaskStatus(body.status);
-          } else {
-            const refreshed = await refreshTaskStatus();
-            pn = Math.max(0, Number(refreshed.data?.primeNegativeAmount ?? 0) || 0);
-          }
-          const entries = await loadTaskActivity();
-          if (hasPendingPrimeOrder(entries)) {
-            setToastMessage(primeBlockedToastMessage(pn));
-            window.setTimeout(() => setToastMessage(""), 2200);
-          } else {
-            setFailedMessage("check your activity track");
-            setIsFailedModalOpen(true);
-          }
-        };
-        void run();
+        const st = body.status;
+        if (st) setTaskStatus(st);
+        else void refreshTaskStatus();
+        const t = body.task;
+        const ctn = Math.max(0, Number(st?.currentTaskNo ?? taskStatus?.currentTaskNo ?? 0) || 0);
+        if (t?.image) {
+          setPrimeBlockProduct({ image: t.image, title: t.title || getTitleFromImageName(t.image) });
+          setIsPrimeBlockModalOpen(true);
+        } else if (st?.primeGrabProduct?.image) {
+          setPrimeBlockProduct({
+            image: st.primeGrabProduct.image,
+            title: st.primeGrabProduct.title || getTitleFromImageName(st.primeGrabProduct.image),
+          });
+          setIsPrimeBlockModalOpen(true);
+        } else {
+          void fetchPrimeGrabDisplay(ctn, setTaskStatus).then((product) => {
+            setPrimeBlockProduct(product);
+            setIsPrimeBlockModalOpen(true);
+          });
+        }
         return;
       }
       if (res.error || !res.data || !res.data.task) {
@@ -566,7 +887,10 @@ export function ReportClient() {
         setIsFailedModalOpen(true);
         return;
       }
-      if (waitingForAdminReassign || !res.data.status?.canPerformTasks) {
+      if (
+        (waitingForAdminReassign || !res.data.status?.canPerformTasks) &&
+        !primeRechargeShortfall
+      ) {
         setFailedMessage("check your activity track");
         setIsFailedModalOpen(true);
         return;
@@ -587,6 +911,7 @@ export function ReportClient() {
       setImgError(false);
       setIsTaskModalOpen(true);
       void loadTaskActivity();
+      void refreshWallet();
     }).catch(() => {
       setFailedMessage("check your activity track");
       setIsFailedModalOpen(true);
@@ -619,18 +944,28 @@ export function ReportClient() {
           setIsConfirming(false);
           return;
         }
-        if ((res.data as { code?: string } | undefined)?.code === "PRIME_ORDER_PENDING") {
-          void refreshTaskStatus().then((r) => {
-            const pn = Math.max(0, Number(r.data?.primeNegativeAmount ?? 0) || 0);
-            void loadTaskActivity().then((entries) => {
-              if (hasPendingPrimeOrder(entries)) {
-                setFailedMessage("check your acitivty task you get prime order");
-                setToastMessage(primeBlockedToastMessage(pn));
-                window.setTimeout(() => setToastMessage(""), 2200);
-              } else {
-                setFailedMessage("check your activity track");
-              }
-            });
+        const c = (res.data as { code?: string } | undefined)?.code;
+        if (c === "PRIME_BLOCKED" || c === "PRIME_ORDER_PENDING") {
+          void refreshTaskStatus().then(async (r) => {
+            const ctn = Math.max(0, Number(r.data?.currentTaskNo ?? taskStatus?.currentTaskNo ?? 0) || 0);
+            if (activeTask?.image) {
+              setPrimeBlockProduct({
+                image: activeTask.image,
+                title: activeTask.title || getTitleFromImageName(activeTask.image),
+              });
+            } else if (r.data?.primeGrabProduct?.image) {
+              setPrimeBlockProduct({
+                image: r.data.primeGrabProduct.image,
+                title:
+                  r.data.primeGrabProduct.title ||
+                  getTitleFromImageName(r.data.primeGrabProduct.image),
+              });
+            } else {
+              const product = await fetchPrimeGrabDisplay(ctn, setTaskStatus);
+              setPrimeBlockProduct(product);
+            }
+            setIsPrimeBlockModalOpen(true);
+            void loadTaskActivity();
           });
         } else {
           setFailedMessage("check your activity track");
@@ -672,13 +1007,22 @@ export function ReportClient() {
       });
       setActivePendingEntryId(null);
       void refetchAssetBalance();
-      if (res.data?.reportProgress != null) {
-        setInstantProfit(Math.max(0, Number(res.data.reportProgress.cycleInstantProfit ?? 0)));
-      } else {
-        void refreshTaskStatus().then((r) => {
-          const cp = r.data?.reportProgress?.cycleInstantProfit;
-          if (cp != null) setInstantProfit(Math.max(0, Number(cp)));
-        });
+      if (res.data) {
+        const ip =
+          res.data.instantProfit ??
+          res.data.instant_profit ??
+          res.data.reportProgress?.cycleInstantProfit;
+        if (ip != null && Number.isFinite(Number(ip))) {
+          setInstantProfit(Number(ip));
+        } else {
+          void refreshTaskStatus().then((r) => {
+            const d = r.data;
+            if (!d) return;
+            const v =
+              d.instantProfit ?? d.instant_profit ?? d.reportProgress?.cycleInstantProfit;
+            if (v != null && Number.isFinite(Number(v))) setInstantProfit(Number(v));
+          });
+        }
       }
       setCurrentTaskIndex((i) => {
         const nextIdx = i + 1;
@@ -701,6 +1045,7 @@ export function ReportClient() {
       setIsSuccessModalOpen(false);
       setIsConfirming(false);
       void loadTaskActivity();
+      void refreshWallet();
     });
   };
 
@@ -722,47 +1067,41 @@ export function ReportClient() {
     }
   };
 
-  const closeRewardModal = () => {
+  const closeRewardModal = (opts?: { fromGiftContinue?: boolean }) => {
     if (selectedGiftBox !== null) {
       setActivityPendingHiddenUntilAdminPersisted(true);
+    }
+    if (opts?.fromGiftContinue) {
+      setShowWaitForAdminAfterGiftContinue(true);
     }
     setIsRewardModalOpen(false);
     setSelectedGiftBox(null);
     setGiftRewardTask(null);
     void refreshTaskStatus();
     void loadTaskActivity();
+    void refreshWallet();
   };
 
   const filteredActivityEntries = useMemo(() => {
     const pendingEntriesRaw = activityEntries.filter((e) => e.status === "pending");
-    const pendingEntries = suppressPendingInActivity ? [] : pendingEntriesRaw;
+    /** Hide generic pending during “wait for admin” / post-gift — but always keep Prime Order rows visible. */
+    const pendingEntries = suppressPendingInActivity
+      ? pendingEntriesRaw.filter((e) => Boolean(e.isPrime))
+      : pendingEntriesRaw;
     const completedEntries = activityEntries.filter((e) => e.status === "completed");
-    const pendingPrimeForList = pendingEntries.find((e) => Boolean(e.isPrime)) || null;
     // Keep completed history compact: 1 notification per fully completed 30-task cycle.
     const completedSummaryNotifications = buildCompletedNotifications(activityEntries, total);
-    const primeOrderNotifications: ActivityEntry[] = pendingPrimeForList
-      ? [
-          {
-            id: `prime-order-notice-${pendingPrimeForList.id}`,
-            title: "Prime Order Assigned (Action Required • 5x Commission)",
-            orderNumber: `Remaining tasks: ${Math.max(0, Number(taskStatus?.remaining ?? 0))}`,
-            quantityRs: pendingPrimeForList.quantityRs,
-            commissionRs: pendingPrimeForList.commissionRs,
-            createdAt: pendingPrimeForList.createdAt,
-            status: "pending",
-            isPrime: true,
-          },
-        ]
-      : [];
     const visiblePendingEntries = pendingEntries;
+    const virtual = virtualPrimeActivityEntry;
+    const primeBanner = virtual ? [virtual] : [];
     const allEntries = [
+      ...primeBanner,
       ...visiblePendingEntries,
-      ...primeOrderNotifications,
       ...completedSummaryNotifications,
       ...completedEntries,
     ];
     if (activityTab === "all") return allEntries;
-    if (activityTab === "pending") return [...visiblePendingEntries, ...primeOrderNotifications];
+    if (activityTab === "pending") return [...primeBanner, ...visiblePendingEntries];
     // Completed tab should show both the per-task completed history and the 30-task cycle summaries.
     return [...completedSummaryNotifications, ...completedEntries];
   }, [
@@ -772,29 +1111,68 @@ export function ReportClient() {
     isAdminAssignedCyclePending,
     total,
     suppressPendingInActivity,
+    virtualPrimeActivityEntry,
   ]);
 
   const handlePendingDispose = (entry: ActivityEntry) => {
+    if (entry.activityType === "prime_notice") {
+      if (accountBalanceInsufficient) {
+        showNegativeBalanceActivityToast(setToastMessage);
+        setToastHint("");
+        return;
+      }
+      const ctn = Math.max(0, Number(entry.taskNo ?? taskStatus?.currentTaskNo ?? 0) || 0);
+      void fetchPrimeGrabDisplay(ctn, setTaskStatus).then((product) => {
+        setPrimeBlockProduct(product);
+        setIsPrimeBlockModalOpen(true);
+      });
+      return;
+    }
     if (accountBalanceInsufficient) {
-      showRechargeToast(setToastMessage);
+      showNegativeBalanceActivityToast(setToastMessage);
+      setToastHint("");
       return;
     }
     if (entry.isPrime && entry.status === "pending" && isPrimeContinueLocked) {
-      setToastMessage(primeBlockedToastMessage(primeNegativeAmount));
-      window.setTimeout(() => setToastMessage(""), 2200);
+      setToastMessage(primeBlockedToastMessage());
+      setToastHint("");
+      window.setTimeout(() => {
+        setToastMessage("");
+        setToastHint("");
+      }, 2600);
       return;
     }
     userApi.completeTask(entry.id).then((res) => {
       if (res.error) {
         if ((res.data as { code?: string } | undefined)?.code === "INSUFFICIENT_BALANCE") {
-          showRechargeToast(setToastMessage);
+          showNegativeBalanceActivityToast(setToastMessage);
+          setToastHint("");
           return;
         }
-        if ((res.data as { code?: string } | undefined)?.code === "PRIME_ORDER_PENDING") {
-          void refreshTaskStatus().then((r) => {
-            const pn = Math.max(0, Number(r.data?.primeNegativeAmount ?? 0) || 0);
-            setToastMessage(primeBlockedToastMessage(pn));
-            window.setTimeout(() => setToastMessage(""), 2200);
+        const c2 = (res.data as { code?: string } | undefined)?.code;
+        if (c2 === "PRIME_BLOCKED" || c2 === "PRIME_ORDER_PENDING") {
+          void refreshTaskStatus().then(async (r) => {
+            const ctn = Math.max(0, Number(entry.taskNo ?? r.data?.currentTaskNo ?? 0) || 0);
+            if (entry.taskImage) {
+              setPrimeBlockProduct({
+                image: entry.taskImage,
+                title:
+                  (entry.taskTitle && String(entry.taskTitle)) ||
+                  entry.title ||
+                  getTitleFromImageName(entry.taskImage),
+              });
+            } else if (r.data?.primeGrabProduct?.image) {
+              setPrimeBlockProduct({
+                image: r.data.primeGrabProduct.image,
+                title:
+                  r.data.primeGrabProduct.title ||
+                  getTitleFromImageName(r.data.primeGrabProduct.image),
+              });
+            } else {
+              const product = await fetchPrimeGrabDisplay(ctn, setTaskStatus);
+              setPrimeBlockProduct(product);
+            }
+            setIsPrimeBlockModalOpen(true);
           });
           return;
         }
@@ -816,15 +1194,25 @@ export function ReportClient() {
         ),
       );
       void refetchAssetBalance();
-      if (res.data?.reportProgress != null) {
-        setInstantProfit(Math.max(0, Number(res.data.reportProgress.cycleInstantProfit ?? 0)));
-      } else {
-        void refreshTaskStatus().then((r) => {
-          const cp = r.data?.reportProgress?.cycleInstantProfit;
-          if (cp != null) setInstantProfit(Math.max(0, Number(cp)));
-        });
+      if (res.data) {
+        const ip =
+          res.data.instantProfit ??
+          res.data.instant_profit ??
+          res.data.reportProgress?.cycleInstantProfit;
+        if (ip != null && Number.isFinite(Number(ip))) {
+          setInstantProfit(Number(ip));
+        } else {
+          void refreshTaskStatus().then((r) => {
+            const d = r.data;
+            if (!d) return;
+            const v =
+              d.instantProfit ?? d.instant_profit ?? d.reportProgress?.cycleInstantProfit;
+            if (v != null && Number.isFinite(Number(v))) setInstantProfit(Number(v));
+          });
+        }
       }
       void loadTaskActivity();
+      void refreshWallet();
     });
   };
 
@@ -843,28 +1231,15 @@ export function ReportClient() {
           <span className="text-xs text-slate-500">Total Capital</span>
           <span
             className={`text-xl font-semibold ${
-              totalCapitalDisplay.mode === "prime_adjusted" && totalCapitalDisplay.value < 0
-                ? "text-rose-700"
-                : totalCapitalDisplay.mode === "balance" && assetBalance < 0
-                  ? "text-rose-700"
-                  : totalCapitalDisplay.mode === "balance" && assetBalance > 0
-                    ? "text-emerald-700"
-                    : "text-slate-900"
+              primeRechargeShortfall
+                ? "text-rose-600"
+                : totalCapitalDisplay > 0 && isWithin24hOfDeposit
+                  ? "text-emerald-700"
+                  : "text-slate-900"
             }`}
           >
-            {totalCapitalDisplay.mode === "prime_adjusted"
-              ? totalCapitalDisplay.value < 0
-                ? currencyRsSigned(totalCapitalDisplay.value)
-                : currencyRs(totalCapitalDisplay.value)
-              : assetBalance < 0
-                ? currencyRsSigned(assetBalance)
-                : assetBalanceFormatted}
+            {currencyRs(totalCapitalDisplay)}
           </span>
-          {showPrimeRechargeNotice ? (
-            <p className="text-[11px] text-amber-700 max-w-[280px] text-center">
-              Prime order: add balance to reach Rs {primeNegativeAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} to complete this order (order amount may show as negative).
-            </p>
-          ) : null}
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs text-slate-800">
@@ -893,12 +1268,8 @@ export function ReportClient() {
               </span>
               Protected Reserve
             </p>
-            <p
-              className={`text-sm font-semibold ${
-                protectedReserveDisplay.total < 0 ? "text-rose-700" : "text-slate-900"
-              }`}
-            >
-              {currencyRs(protectedReserveDisplay.total)}
+            <p className="text-sm font-semibold text-slate-900">
+              {currencyRs(protectedReserveDisplay)}
             </p>
           </div>
           <div className="space-y-1">
@@ -908,7 +1279,7 @@ export function ReportClient() {
               </span>
               Campaign Wallet
             </p>
-            <p className="text-sm font-semibold">{currencyRs(campaignWallet)}</p>
+            <p className="text-sm font-semibold">{currencyRs(reportCampaignWallet)}</p>
           </div>
         </div>
       </div>
@@ -922,13 +1293,30 @@ export function ReportClient() {
         </span>
       </div>
 
+      {showWaitForAdminAfterGiftContinue ? (
+        <div
+          className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm font-medium text-amber-950"
+          role="status"
+        >
+          Wait for admin for the next cycle.
+        </div>
+      ) : null}
+
       <div className="space-y-3">
         <button
           type="button"
           onClick={openTaskModal}
           disabled={
-            (isPrimeContinueLocked && !accountBalanceInsufficient) ||
-            (Boolean(taskStatus && !taskStatus.canPerformTasks) && !accountBalanceInsufficient)
+            accountBalanceInsufficient ||
+            awaitingAdminOnly ||
+            waitingForAdminReassign ||
+            showWaitForAdminAfterGiftContinue ||
+            (!primeRechargeShortfall &&
+              isPrimeContinueLocked &&
+              !accountBalanceInsufficient) ||
+            (!primeRechargeShortfall &&
+              Boolean(taskStatus && !taskStatus.canPerformTasks) &&
+              !accountBalanceInsufficient)
           }
           className="w-full rounded-md bg-sky-600 py-2.5 text-sm font-semibold text-white shadow hover:bg-sky-700 disabled:opacity-50 disabled:pointer-events-none"
         >
@@ -937,12 +1325,8 @@ export function ReportClient() {
         <button
           type="button"
           onClick={() => {
-            if (accountBalanceInsufficient) {
-              showRechargeToast(setToastMessage);
-              return;
-            }
-            refreshTaskStatus();
-            loadTaskActivity();
+            void refreshTaskStatus();
+            void loadTaskActivity();
             setIsActivityModalOpen(true);
           }}
           className="w-full rounded-md border border-slate-300 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
@@ -950,6 +1334,25 @@ export function ReportClient() {
           Activity Track
         </button>
       </div>
+
+      <ModalShell
+        open={isPrimeBlockModalOpen}
+        onClose={() => setIsPrimeBlockModalOpen(false)}
+      >
+        <GrabOrderPrimeModalBody
+          product={primeBlockProduct}
+          onClose={() => setIsPrimeBlockModalOpen(false)}
+          onBookNow={() => {
+            setToastMessage("Your balance is insufficient please recharge");
+            setToastHint("");
+            window.setTimeout(() => {
+              setToastMessage("");
+              setToastHint("");
+            }, 2600);
+            setIsPrimeBlockModalOpen(false);
+          }}
+        />
+      </ModalShell>
 
       <ModalShell
         open={isTaskModalOpen}
@@ -1145,7 +1548,7 @@ export function ReportClient() {
               </div>
               <button
                 type="button"
-                onClick={closeRewardModal}
+                onClick={() => closeRewardModal({ fromGiftContinue: true })}
                 className="w-full rounded-md bg-orange-600 py-2.5 text-sm font-semibold text-white hover:bg-orange-700"
               >
                 Continue
@@ -1194,6 +1597,16 @@ export function ReportClient() {
           </div>
         </div>
 
+        {virtualPrimeActivityEntry && activityTab === "completed" ? (
+          <div className="px-5 pt-2">
+            <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2.5 text-xs leading-relaxed text-violet-950">
+              <span className="font-semibold">Pending Prime Order</span> — open the{" "}
+              <strong>Pending</strong> or <strong>All</strong> tab to see it and continue after
+              recharge.
+            </div>
+          </div>
+        ) : null}
+
         <div className="p-5 space-y-4 max-h-[70vh] overflow-auto">
           {filteredActivityEntries.length === 0 ? (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600">
@@ -1201,6 +1614,7 @@ export function ReportClient() {
             </div>
           ) : (
             filteredActivityEntries.map((e) => {
+              const isLogEntry = e.activityType === "log";
               const primeRowLocked =
                 Boolean(e.isPrime) &&
                 e.status === "pending" &&
@@ -1216,7 +1630,7 @@ export function ReportClient() {
               >
                 <div className="space-y-3">
                   <p className="text-right text-sm font-semibold text-slate-800">
-                    {e.isPrime ? "Prime Order • x5 commission" : "Brand Vault"}
+                    {isLogEntry ? "Activity" : e.isPrime ? "Prime Order • x5 commission" : "Brand Vault"}
                     {primeRowLocked ? (
                       <span className="ml-2 inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
                         Locked
@@ -1226,21 +1640,36 @@ export function ReportClient() {
                   <div className="h-px w-full bg-slate-200" />
                 </div>
 
-                <p
-                  className={`text-lg font-semibold leading-snug ${
-                    primeRowLocked ? "text-rose-800" : "text-slate-900"
-                  }`}
+                <div
+                  className={`space-y-1 ${primeRowLocked ? "text-rose-800" : "text-slate-900"}`}
                 >
-                  {e.isPrime ? "Prime Order" : e.title}
-                </p>
+                  <p className="text-lg font-semibold leading-snug">
+                    {isLogEntry ? e.message || e.title : e.isPrime ? "Prime Order" : e.title}
+                  </p>
+                  {e.isPrime && !isLogEntry && (e.taskTitle || e.title) ? (
+                    <p className="text-sm font-medium leading-snug text-slate-600">
+                      {e.taskTitle || e.title}
+                    </p>
+                  ) : null}
+                </div>
 
+                {isLogEntry ? (
+                  <div className="text-xs text-slate-700">
+                    <p>
+                      <span className="font-medium">Time</span>: {formatTimestamp(e.createdAt)}
+                    </p>
+                  </div>
+                ) : (
                 <div className="text-xs text-slate-700 space-y-1.5">
                   <p>
                     <span className="font-medium">Order number</span>:{" "}
                     {e.orderNumber}
                   </p>
                   <p>
-                    <span className="font-medium">Order quantity</span>:{" "}
+                    <span className="font-medium">
+                      {e.activityType === "prime_notice" ? "Recharge required" : "Order quantity"}
+                    </span>
+                    :{" "}
                     <span
                       className={
                         primeRowLocked && e.quantityRs < 0 ? "font-semibold text-rose-700" : ""
@@ -1251,17 +1680,23 @@ export function ReportClient() {
                   </p>
                   <p>
                     <span className="font-medium">Commission</span>:{" "}
-                    {currencyRs(e.commissionRs)}
-                    {e.isPrime ? " (x5)" : ""}
+                    {e.activityType === "prime_notice" && (!e.commissionRs || e.commissionRs <= 0)
+                      ? "5x after recharge"
+                      : `${currencyRs(e.commissionRs)}${e.isPrime ? " (x5)" : ""}`}
                   </p>
                   <p>
                     <span className="font-medium">Time</span>:{" "}
                     {formatTimestamp(e.createdAt)}
                   </p>
                 </div>
+                )}
 
                 <div className="pt-1">
-                  {e.status === "completed" ? (
+                  {isLogEntry ? (
+                    <span className="inline-flex items-center justify-center rounded-full bg-black px-12 py-2.5 text-xs font-semibold text-white shadow">
+                      Completed
+                    </span>
+                  ) : e.status === "completed" ? (
                     <span className="inline-flex items-center justify-center rounded-full bg-black px-12 py-2.5 text-xs font-semibold text-white shadow">
                       Completed
                     </span>
@@ -1270,11 +1705,15 @@ export function ReportClient() {
                       type="button"
                       onClick={() => handlePendingDispose(e)}
                       disabled={
+                        e.activityType !== "prime_notice" &&
+                        !accountBalanceInsufficient &&
                         e.isPrime &&
                         e.status === "pending" &&
                         isPrimeContinueLocked
                       }
                       title={
+                        e.activityType !== "prime_notice" &&
+                        !accountBalanceInsufficient &&
                         e.isPrime &&
                         e.status === "pending" &&
                         isPrimeContinueLocked &&
@@ -1339,80 +1778,20 @@ export function ReportClient() {
         </div>
       </ModalShell>
 
-      <ModalShell open={isPrimeCongratsOpen} onClose={() => setIsPrimeCongratsOpen(false)}>
-        <div className="relative overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-b from-amber-50 to-white" />
-          <div
-            className="absolute inset-0 opacity-40"
-            style={{
-              backgroundImage:
-                "radial-gradient(circle at 10% 10%, rgba(245,158,11,.25) 0 10px, transparent 11px), radial-gradient(circle at 70% 20%, rgba(16,185,129,.25) 0 8px, transparent 9px), radial-gradient(circle at 30% 70%, rgba(168,85,247,.25) 0 9px, transparent 10px)",
-            }}
-          />
-
-          <div className="relative px-4 pt-3 pb-4 border-b border-slate-200 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-slate-900 mx-auto">Grab Order</h2>
-            <button
-              type="button"
-              onClick={() => setIsPrimeCongratsOpen(false)}
-              className="absolute right-4 h-8 w-8 rounded-full hover:bg-slate-100 grid place-items-center text-slate-500"
-              aria-label="Close prime notice"
-            >
-              ✕
-            </button>
-          </div>
-
-          <div className="relative p-6 text-center space-y-4">
-            <div className="mx-auto h-16 w-16 rounded-full bg-emerald-500 grid place-items-center shadow">
-              <svg viewBox="0 0 24 24" className="h-9 w-9 text-white" fill="none" stroke="currentColor" strokeWidth="3">
-                <path d="M20 6 9 17l-5-5" />
-              </svg>
-            </div>
-
-            <div className="space-y-1">
-              <p className="text-xl font-semibold text-slate-900">Congratulations!!</p>
-              <p className="text-xs text-slate-600">
-                You have received an exclusive booking.
-              </p>
-            </div>
-
-            {primeReward ? (
-              <div className="mx-auto w-full max-w-xs rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <div className="relative h-14 w-20 rounded-md overflow-hidden border border-slate-200 bg-slate-50">
-                    <Image
-                      src={primeReward.image}
-                      alt={primeReward.title}
-                      fill
-                      sizes="80px"
-                      className="object-cover"
-                    />
-                  </div>
-                  <div className="min-w-0 text-left">
-                    <div className="text-xs font-semibold text-slate-900 truncate">
-                      {primeReward.title}
-                    </div>
-                    <div className="text-[11px] text-slate-600">
-                      Prime order assigned by admin
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            <button
-              type="button"
-              onClick={() => setIsPrimeCongratsOpen(false)}
-              className="w-full rounded-md bg-sky-600 py-3 text-sm font-semibold text-white shadow hover:bg-sky-700"
-            >
-              Book Now
-            </button>
-          </div>
-        </div>
+      <ModalShell
+        open={isPrimeCongratsOpen}
+        onClose={() => setIsPrimeCongratsOpen(false)}
+      >
+        <GrabOrderPrimeModalBody
+          product={primeReward}
+          onClose={() => setIsPrimeCongratsOpen(false)}
+          onBookNow={() => setIsPrimeCongratsOpen(false)}
+        />
       </ModalShell>
       {toastMessage ? (
         <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-black/75 px-4 py-3 text-center text-sm font-medium text-white shadow">
           {toastMessage}
+          {toastHint ? <p className="mt-1 text-xs text-slate-200">{toastHint}</p> : null}
         </div>
       ) : null}
     </section>

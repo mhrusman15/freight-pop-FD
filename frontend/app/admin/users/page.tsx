@@ -24,7 +24,7 @@ function formatDate(iso: string) {
 
 function UserStatusBadges({ user }: { user: AdminUserRow }) {
   const bal = Number(user.asset_balance ?? 0);
-  const slots = user.prime_order_slots ?? [];
+  const slots = user.prime_order_slots ?? user.prime_orders?.map((p) => p.task_no) ?? [];
   const qt = Math.max(1, Number(user.task_quota_total ?? TASK_ASSIGN_LIMIT));
   const qu = Math.max(0, Number(user.task_quota_used ?? 0));
   const req = Boolean(user.task_assignment_required);
@@ -111,12 +111,11 @@ export default function AdminUsersPage() {
   const [success, setSuccess] = useState("");
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  const [assignConfirmUser, setAssignConfirmUser] = useState<AdminUserRow | null>(null);
-  const [primeModalUser, setPrimeModalUser] = useState<AdminUserRow | null>(null);
-  const [primeSlots, setPrimeSlots] = useState<number[]>([]);
-  const [savingPrime, setSavingPrime] = useState(false);
-  const [primeRequireRecharge, setPrimeRequireRecharge] = useState(false);
-  const [primeRechargeRs, setPrimeRechargeRs] = useState("");
+  /** Step 1: multi-select task numbers (1–30). Step 2: amount per selected task. Step 3: confirm. */
+  const [cycleModalUser, setCycleModalUser] = useState<AdminUserRow | null>(null);
+  const [cycleStep, setCycleStep] = useState<1 | 2 | 3>(1);
+  const [selectedPrimeTasks, setSelectedPrimeTasks] = useState<number[]>([]);
+  const [primeAmounts, setPrimeAmounts] = useState<Record<number, string>>({});
 
   const [balancePos, setBalancePos] = useState<Record<string, string>>({});
   const [balanceNeg, setBalanceNeg] = useState<Record<string, string>>({});
@@ -161,81 +160,57 @@ export default function AdminUsersPage() {
     load(page);
   };
 
-  const confirmAssignTasks = async () => {
-    if (!assignConfirmUser) return;
-    setAssigningId(assignConfirmUser.id);
+  const openAssignCycleModal = (user: AdminUserRow) => {
+    setSelectedPrimeTasks([]);
+    setPrimeAmounts({});
+    setCycleStep(1);
+    setCycleModalUser(user);
+  };
+
+  const togglePrimeTask = (n: number) => {
+    setSelectedPrimeTasks((prev) => {
+      if (prev.includes(n)) {
+        setPrimeAmounts((p) => {
+          const next = { ...p };
+          delete next[n];
+          return next;
+        });
+        return prev.filter((x) => x !== n);
+      }
+      return [...prev, n].sort((a, b) => a - b);
+    });
+  };
+
+  const submitAssignCycleWithPrime = async () => {
+    if (!cycleModalUser) return;
+    const sorted = [...selectedPrimeTasks].sort((a, b) => a - b);
+    const orders: { task_no: number; negative_amount: number }[] = [];
+    for (const t of sorted) {
+      const raw = (primeAmounts[t] ?? "").trim();
+      const n = raw === "" ? NaN : Number(raw);
+      if (!Number.isFinite(n) || n <= 0) {
+        setError(`Enter a valid recharge amount (Rs) for task #${t}.`);
+        showToast("error", `Enter amount for task #${t}`);
+        return;
+      }
+      orders.push({ task_no: t, negative_amount: n });
+    }
+    setAssigningId(cycleModalUser.id);
     setError("");
-    const res = await adminApi.assignUserTasks(assignConfirmUser.id);
+    const res = await adminApi.assignTasksWithPrime(cycleModalUser.id, orders);
     setAssigningId(null);
-    setAssignConfirmUser(null);
     if (res.error) {
       setError(res.error);
       showToast("error", res.error);
       return;
     }
-    setSuccess("");
-    showToast("success", "30 tasks assigned successfully.");
-    load(page);
-  };
-
-  const togglePrimeSlot = (slot: number) => {
-    setPrimeSlots((prev) =>
-      prev.includes(slot) ? prev.filter((x) => x !== slot) : [...prev, slot].sort((a, b) => a - b),
+    setCycleModalUser(null);
+    showToast(
+      "success",
+      orders.length
+        ? `30-task cycle assigned with ${orders.length} prime order(s).`
+        : "30-task cycle assigned (no prime tasks).",
     );
-  };
-
-  const submitPrimeOrders = async () => {
-    if (!primeModalUser) return;
-    if (primeSlots.length === 0) {
-      await clearPrimeSlots();
-      return;
-    }
-    const noNegative = !primeRequireRecharge;
-    const negRaw = primeRechargeRs.trim() === "" ? 0 : Number(primeRechargeRs);
-    if (primeRequireRecharge && (!Number.isFinite(negRaw) || negRaw <= 0)) {
-      setError("Enter a valid recharge amount (Rs) when “Require Recharge” is on.");
-      showToast("error", "Enter a valid recharge amount.");
-      return;
-    }
-    setSavingPrime(true);
-    setError("");
-    const res = await adminApi.assignPrimeOrders(primeModalUser.id, primeSlots, {
-      noNegative,
-      negativeAmount: noNegative ? 0 : negRaw,
-    });
-    setSavingPrime(false);
-    if (res.error) {
-      setError(res.error);
-      showToast("error", res.error);
-      return;
-    }
-    setPrimeModalUser(null);
-    setPrimeSlots([]);
-    setPrimeRequireRecharge(false);
-    setPrimeRechargeRs("");
-    showToast("success", "Prime order configuration saved.");
-    load(page);
-  };
-
-  const clearPrimeSlots = async () => {
-    if (!primeModalUser) return;
-    setSavingPrime(true);
-    setError("");
-    const res = await adminApi.assignPrimeOrders(primeModalUser.id, [], {
-      noNegative: true,
-      negativeAmount: 0,
-    });
-    setSavingPrime(false);
-    if (res.error) {
-      setError(res.error);
-      showToast("error", res.error);
-      return;
-    }
-    setPrimeModalUser(null);
-    setPrimeSlots([]);
-    setPrimeRequireRecharge(false);
-    setPrimeRechargeRs("");
-    showToast("success", "Prime configuration cleared.");
     load(page);
   };
 
@@ -315,7 +290,8 @@ export default function AdminUsersPage() {
     <div className="min-w-0">
       <h1 className="text-xl font-bold text-slate-900 dark:text-white sm:text-2xl">Users</h1>
       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-        Manage users. Task assignment, prime orders, and balance updates are separate actions.
+        Use <strong>Assign 30 Task Cycle</strong> to reset the cycle, set prime task numbers (1–30), and set recharge
+        amount per prime task. Balance updates are separate.
       </p>
       {!canBalance && (
         <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
@@ -345,12 +321,12 @@ export default function AdminUsersPage() {
       </div>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200 sm:px-4 sm:py-3">
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-100 sm:px-4 sm:py-3">
           {error}
         </div>
       )}
       {success && (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-100 sm:px-4 sm:py-3">
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-100 sm:px-4 sm:py-3">
           {success}
         </div>
       )}
@@ -365,34 +341,6 @@ export default function AdminUsersPage() {
           {toast.text}
         </div>
       )}
-
-      <ModalBackdrop
-        open={assignConfirmUser != null}
-        title="Assign 30 tasks"
-        onClose={() => setAssignConfirmUser(null)}
-      >
-        <p className="text-sm text-slate-600 dark:text-slate-300">
-          This will reset current tasks and assign a new 30-task cycle for{" "}
-          <strong>{assignConfirmUser?.full_name}</strong>.
-        </p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => setAssignConfirmUser(null)}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={assigningId === assignConfirmUser?.id}
-            onClick={confirmAssignTasks}
-            className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-60"
-          >
-            {assigningId === assignConfirmUser?.id ? "Assigning…" : "Confirm"}
-          </button>
-        </div>
-      </ModalBackdrop>
 
       <ModalBackdrop
         open={balanceConfirmUser != null}
@@ -422,92 +370,193 @@ export default function AdminUsersPage() {
         </div>
       </ModalBackdrop>
 
-      {primeModalUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-3">
-          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Prime Order Configuration</h3>
-              <button
-                type="button"
-                onClick={() => setPrimeModalUser(null)}
-                className="rounded-md px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                Close
-              </button>
+      <ModalBackdrop
+        open={cycleModalUser != null}
+        title="Assign 30 Task Cycle"
+        onClose={() => setCycleModalUser(null)}
+      >
+        <div className="mb-3 flex items-center gap-2">
+          {([1, 2, 3] as const).map((s) => (
+            <div
+              key={s}
+              className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ${
+                cycleStep === s
+                  ? "bg-violet-600 text-white"
+                  : cycleStep > s
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
+                    : "bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400"
+              }`}
+            >
+              {cycleStep > s ? "✓" : s}
             </div>
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              Select task numbers (1–{TASK_ASSIGN_LIMIT}) for prime orders. This does not assign the 30-task cycle.
+          ))}
+          <span className="ml-1 text-[10px] text-slate-500 dark:text-slate-400">
+            Step {cycleStep} of 3
+          </span>
+        </div>
+
+        {cycleStep === 1 && (
+          <>
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+              Select prime task numbers (1–30)
             </p>
-            <div className="mt-3 flex flex-wrap items-center gap-3 border-b border-slate-200 pb-3 dark:border-slate-600">
-              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-800 dark:text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={primeRequireRecharge}
-                  onChange={(e) => setPrimeRequireRecharge(e.target.checked)}
-                  className="rounded border-slate-300"
-                />
-                Require Recharge for Prime Tasks
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium text-slate-700 dark:text-slate-300">
-                Recharge Amount (Rs)
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  disabled={!primeRequireRecharge}
-                  value={primeRechargeRs}
-                  onChange={(e) => setPrimeRechargeRs(e.target.value)}
-                  className="w-40 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-500 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-400"
-                />
-              </label>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              User: <strong>{cycleModalUser?.full_name}</strong>. You can select none, one, or many. Only one prime is
+              active at a time; lower task numbers unlock first.
+            </p>
+            <div className="mt-3 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-600 dark:bg-slate-800/50">
+              <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-6">
+                {Array.from({ length: TASK_ASSIGN_LIMIT }, (_, i) => i + 1).map((n) => {
+                  const on = selectedPrimeTasks.includes(n);
+                  return (
+                    <label
+                      key={n}
+                      className={`flex cursor-pointer items-center justify-center rounded-md border px-1 py-1.5 text-[11px] font-medium ${
+                        on
+                          ? "border-violet-500 bg-violet-100 text-violet-900 dark:border-violet-400 dark:bg-violet-900/40 dark:text-violet-100"
+                          : "border-slate-200 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={on}
+                        onChange={() => togglePrimeTask(n)}
+                      />
+                      {n}
+                    </label>
+                  );
+                })}
+              </div>
             </div>
-            <div className="mt-3 grid grid-cols-6 gap-2 sm:grid-cols-10">
-              {Array.from({ length: TASK_ASSIGN_LIMIT }, (_, i) => i + 1).map((n) => {
-                const checked = primeSlots.includes(n);
-                return (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => togglePrimeSlot(n)}
-                    className={`rounded border px-2 py-1 text-xs font-medium ${
-                      checked
-                        ? "border-violet-500 bg-violet-50 text-violet-800 dark:border-violet-500 dark:bg-violet-900/30 dark:text-violet-200"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-                    }`}
-                  >
-                    {n}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400">
+              Selected: {selectedPrimeTasks.length ? selectedPrimeTasks.join(", ") : "none"}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => void clearPrimeSlots()}
-                disabled={savingPrime}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-              >
-                Clear prime slots
-              </button>
-              <button
-                type="button"
-                onClick={() => setPrimeModalUser(null)}
+                onClick={() => setCycleModalUser(null)}
                 className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={savingPrime}
-                onClick={submitPrimeOrders}
-                className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-60"
+                onClick={() => setCycleStep(2)}
+                className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
               >
-                {savingPrime ? "Saving…" : "Assign Prime Orders"}
+                Next
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+
+        {cycleStep === 2 && (
+          <>
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+              Recharge required (Rs) per prime task
+            </p>
+            {selectedPrimeTasks.length === 0 ? (
+              <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                No prime tasks selected. The cycle will reset with an empty <code className="text-[10px]">prime_orders</code>{" "}
+                list.
+              </p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {[...selectedPrimeTasks].sort((a, b) => a - b).map((t) => (
+                  <div key={t} className="flex items-center gap-2">
+                    <span className="w-20 shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">
+                      Task {t}
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      step="0.01"
+                      placeholder="Rs"
+                      value={primeAmounts[t] ?? ""}
+                      onChange={(e) =>
+                        setPrimeAmounts((p) => ({
+                          ...p,
+                          [t]: e.target.value,
+                        }))
+                      }
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCycleStep(1)}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => setCycleStep(3)}
+                className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
+              >
+                Next
+              </button>
+            </div>
+          </>
+        )}
+
+        {cycleStep === 3 && (
+          <>
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Confirm</p>
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                Resets the 30-task cycle, clears progress, stores <code className="text-[10px]">prime_orders</code>, and opens task 1.
+              </p>
+              {selectedPrimeTasks.length === 0 ? (
+                <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200">
+                  No prime orders in this assignment.
+                </p>
+              ) : (
+                [...selectedPrimeTasks]
+                  .sort((a, b) => a - b)
+                  .map((t) => (
+                    <div
+                      key={t}
+                      className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50"
+                    >
+                      <p className="text-sm text-slate-700 dark:text-slate-300">
+                        Task <strong>#{t}</strong> — recharge required{" "}
+                        <strong className="text-rose-700 dark:text-rose-400">
+                          Rs{" "}
+                          {Number(primeAmounts[t] || 0).toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}
+                        </strong>
+                      </p>
+                    </div>
+                  ))
+              )}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCycleStep(2)}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                disabled={assigningId === cycleModalUser?.id}
+                onClick={() => void submitAssignCycleWithPrime()}
+                className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-60"
+              >
+                {assigningId === cycleModalUser?.id ? "Saving…" : "Confirm & Save"}
+              </button>
+            </div>
+          </>
+        )}
+      </ModalBackdrop>
 
       <div className="mt-4 sm:mt-6 min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
         {loading ? (
@@ -534,10 +583,7 @@ export default function AdminUsersPage() {
                       Status
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
-                      Task control
-                    </th>
-                    <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
-                      Prime orders
+                      30-task cycle
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
                       Balance control
@@ -566,27 +612,10 @@ export default function AdminUsersPage() {
                         <button
                           type="button"
                           disabled={assigningId === user.id || !canBalance}
-                          onClick={() => setAssignConfirmUser(user)}
+                          onClick={() => openAssignCycleModal(user)}
                           className="rounded-md bg-sky-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
                         >
-                          {assigningId === user.id ? "…" : `Assign ${TASK_ASSIGN_LIMIT} tasks`}
-                        </button>
-                      </td>
-                      <td className="px-2 py-2 align-top sm:px-3">
-                        <button
-                          type="button"
-                          disabled={!canBalance}
-                          onClick={() => {
-                            setPrimeModalUser(user);
-                            const slots = [...(user.prime_order_slots ?? [])].sort((a, b) => a - b);
-                            setPrimeSlots(slots);
-                            const pn = Math.max(0, Number(user.prime_negative_amount ?? 0) || 0);
-                            setPrimeRequireRecharge(pn > 0);
-                            setPrimeRechargeRs(pn > 0 ? String(pn) : "");
-                          }}
-                          className="rounded-md bg-violet-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-                        >
-                          Configure
+                          {assigningId === user.id ? "…" : "Assign 30 Task Cycle"}
                         </button>
                       </td>
                       <td className="px-2 py-2 align-top sm:px-3">

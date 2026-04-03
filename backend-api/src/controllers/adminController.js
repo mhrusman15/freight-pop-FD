@@ -212,6 +212,60 @@ export async function assignPrimeOrders(req, res) {
   }
 }
 
+export async function assignTasksWithPrime(req, res) {
+  try {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+    const primeOrders = Array.isArray(req.body?.primeOrders) ? req.body.primeOrders : [];
+    const status = await User.adminAssignTasksWithPrime(id, primeOrders);
+    if (!status) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json({ message: "30 tasks assigned with prime configuration", status });
+  } catch (err) {
+    console.error("Assign tasks with prime error:", err);
+    res.status(500).json({ error: "Failed to assign tasks with prime" });
+  }
+}
+
+export async function assignSinglePrimeOrder(req, res) {
+  try {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+    let orders = [];
+    if (Array.isArray(req.body?.prime_orders)) {
+      orders = req.body.prime_orders;
+    } else if (req.body?.task_no != null) {
+      orders = [{ task_no: Number(req.body.task_no), negative_amount: Number(req.body.negative_amount) }];
+    }
+    if (orders.length === 0) {
+      return res.status(400).json({ error: "At least one prime order is required" });
+    }
+    for (const o of orders) {
+      const tn = Number(o.task_no);
+      const na = Number(o.negative_amount);
+      if (!Number.isInteger(tn) || tn < 1 || tn > 30) {
+        return res.status(400).json({ error: `Task number must be between 1 and 30 (got ${tn})` });
+      }
+      if (!Number.isFinite(na) || na <= 0) {
+        return res.status(400).json({ error: `Negative amount must be a positive number for task ${tn}` });
+      }
+    }
+    const status = await User.adminAssignSinglePrimeOrder(id, orders);
+    if (!status) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json({ message: `${orders.length} prime order(s) assigned`, status });
+  } catch (err) {
+    console.error("Assign prime order error:", err);
+    res.status(500).json({ error: "Failed to assign prime order" });
+  }
+}
+
 export async function deleteUser(req, res) {
   try {
     const id = req.params.id;

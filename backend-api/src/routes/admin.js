@@ -13,7 +13,13 @@ router.patch("/users/:id/approve", requireAdminPermission("approve_only"), admin
 router.patch("/users/:id/reject", requireAdminPermission("approve_only"), adminController.rejectUser);
 router.patch("/users/:id/balance", requireAdminPermission("balance_only"), adminController.updateUserBalance);
 router.patch("/users/:id/tasks/assign", requireAdminPermission("balance_only"), adminController.assignUserTasks);
+router.patch(
+  "/users/:id/tasks/assign-with-prime",
+  requireAdminPermission("balance_only"),
+  adminController.assignTasksWithPrime,
+);
 router.patch("/users/:id/tasks/prime", requireAdminPermission("balance_only"), adminController.assignPrimeOrders);
+router.post("/users/:id/assign-prime-order", requireAdminPermission("balance_only"), adminController.assignSinglePrimeOrder);
 router.delete("/users/:id", requireAdminPermission("balance_only"), adminController.deleteUser);
 
 // Super admin only routes for managing admin accounts and roles.

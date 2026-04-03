@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Match ThemeProvider: `dark:` follows the `.dark` class on <html>, not OS prefers-color-scheme.
+   Otherwise OS dark + in-app light yields light `dark:` text on light surfaces (e.g. emerald-50). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #020617;
