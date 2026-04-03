@@ -1483,7 +1483,7 @@ export function ReportClient() {
           </h2>
           <button
             type="button"
-            onClick={closeRewardModal}
+            onClick={() => closeRewardModal()}
             className="absolute right-4 h-8 w-8 rounded-full hover:bg-slate-100 grid place-items-center text-slate-600"
             aria-label="Close reward popup"
           >
