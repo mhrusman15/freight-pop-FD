@@ -2,6 +2,16 @@
 
 Backend uses **Supabase** (PostgreSQL + Auth). All app data is stored in your Supabase project—nothing is persisted in local files or in-memory stores.
 
+## Deploy on Vercel (standalone API project)
+
+If this repo is a monorepo, do **not** leave **Root Directory** empty for an API-only project: Vercel will run the root `package.json` `build` script and deploy the **Next.js frontend** instead of this API.
+
+1. Vercel → your API project → **Settings** → **General** → **Root Directory** → `backend-api` (Save).
+2. Redeploy. Build uses `backend-api/vercel.json` (serverless Node, `api/index.js`).
+3. Set environment variables on that project: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and any others from `backend-api` `.env.example`.
+
+For **one** Vercel project that serves both the Next app and this API under `/_/backend`, use the repo root and root `vercel.json` (**experimental Services**), not a separate `*-backend` project with root directory `.`.
+
 ## Setup
 
 1. **Supabase project**: Create a project at [supabase.com](https://supabase.com).

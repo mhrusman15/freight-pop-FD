@@ -3,8 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build",
-    "prebuild": "cd frontend && npm ci --include=dev",
+    "build": "node scripts/vercel-root-build.cjs",
     "start": "cd frontend && npm run start",
     "lint": "cd frontend && npm run lint"
   },
