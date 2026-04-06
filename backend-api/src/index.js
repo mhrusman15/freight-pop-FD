@@ -15,6 +15,15 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 app.get("/", (req, res) => {
+  if (req.accepts("html")) {
+    res.type("html").send(
+      "<!DOCTYPE html><html><head><meta charset=utf-8><title>Freight POP API</title></head>" +
+        "<body style=\"font-family:system-ui;margin:2rem\"><h1>API is running</h1>" +
+        "<p>This host serves JSON only. Try <a href=\"/health\">/health</a> or open <code>/health</code> in the API client.</p>" +
+        "</body></html>"
+    );
+    return;
+  }
   res.json({ ok: true });
 });
 

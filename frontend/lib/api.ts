@@ -42,17 +42,42 @@ function isLoopbackApiUrl(urlStr: string): boolean {
   }
 }
 
+/** Two Vercel projects (frontend + backend-api): API is another host, not `/_/backend` on the web app. */
+function vercelSplitApiMode(): boolean {
+  return process.env.NEXT_PUBLIC_VERCEL_API_MODE?.trim().toLowerCase() === "split";
+}
+
 /**
  * API origin for fetches. Resolved at call time (not module load) so the browser
  * always sees `window`, and production never inherits SSR/build localhost.
  */
 function getApiBase(): string {
   const envBase = process.env.NEXT_PUBLIC_API_URL?.trim();
+  const split = vercelSplitApiMode();
 
   if (typeof window !== "undefined") {
     const origin = window.location.origin;
     const pageIsLocal = isBrowserLocalHost(window.location.hostname);
 
+    if (split) {
+      if (pageIsLocal) {
+        if (envBase && !isLoopbackApiUrl(envBase)) return envBase.replace(/\/$/, "");
+        return (envBase && envBase.replace(/\/$/, "")) || "http://localhost:4000";
+      }
+      if (envBase && isLoopbackApiUrl(envBase)) return "";
+      if (envBase) {
+        const cleaned = envBase.replace(/\/$/, "");
+        try {
+          const u = new URL(cleaned);
+          if (u.protocol === "http:" || u.protocol === "https:") return cleaned;
+        } catch {
+          /* ignore */
+        }
+      }
+      return "";
+    }
+
+    // Monorepo (one Vercel project + Services): same-origin `/_/backend`.
     // Common mistake: Vercel env copies .env.example with http://localhost:4000 — breaks login in production.
     if (!pageIsLocal && envBase && isLoopbackApiUrl(envBase)) {
       return `${origin}/_/backend`;
@@ -85,6 +110,13 @@ function getApiBase(): string {
   }
 
   // SSR / Node: no window — avoid localhost if a public site URL is configured
+  if (split) {
+    if (envBase) {
+      const cleaned = envBase.replace(/\/$/, "");
+      if (cleaned && !isLoopbackApiUrl(cleaned)) return cleaned;
+    }
+    return "";
+  }
   if (envBase) {
     const cleaned = envBase.replace(/\/$/, "");
     if (cleaned && !isLoopbackApiUrl(cleaned)) return cleaned;
@@ -114,7 +146,9 @@ async function refreshAccessToken(scope: AuthScope): Promise<boolean> {
 
   const job = (async () => {
     try {
-      const res = await fetch(`${getApiBase()}/api/auth/refresh`, {
+      const base = getApiBase();
+      if (!base) return false;
+      const res = await fetch(`${base}/api/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken: rt }),
@@ -153,10 +187,19 @@ export async function api<T>(
     cache: fetchOptions.cache ?? (method === "GET" ? "no-store" : undefined),
   };
 
+  const apiBase = getApiBase();
+  if (!apiBase) {
+    return {
+      error:
+        "API base URL is not configured. If the API is a separate Vercel project, set NEXT_PUBLIC_VERCEL_API_MODE=split and NEXT_PUBLIC_API_URL to your API origin (e.g. https://your-api.vercel.app). See frontend/.env.example.",
+      status: 0,
+    };
+  }
+
   let res: Response;
   let retriedAfterRefresh = false;
   try {
-    res = await fetch(`${getApiBase()}${path}`, { ...effectiveFetchOptions, headers });
+    res = await fetch(`${apiBase}${path}`, { ...effectiveFetchOptions, headers });
     if (
       res.status === 401 &&
       !retriedAfterRefresh &&
@@ -166,7 +209,7 @@ export async function api<T>(
       retriedAfterRefresh = true;
       const newTok = tokenForScope(requestScope);
       if (newTok) headers["Authorization"] = `Bearer ${newTok}`;
-      res = await fetch(`${getApiBase()}${path}`, { ...effectiveFetchOptions, headers });
+      res = await fetch(`${apiBase}${path}`, { ...effectiveFetchOptions, headers });
     }
   } catch {
     // Network-level failure (no HTTP response).
@@ -190,7 +233,7 @@ export async function api<T>(
       return {
         error:
           "Server returned an invalid/empty JSON response. " +
-          'This usually means the backend route is not being reached (check "/_/backend/health" on Vercel) ' +
+          'This usually means the backend route is not being reached (check your API /health URL on Vercel) ' +
           "or the function crashed before responding.",
         status: res.status,
       };
@@ -210,7 +253,7 @@ export async function api<T>(
     return {
       error:
         `Unexpected non-JSON response from server. ` +
-        `Check NEXT_PUBLIC_API_URL (should be "/_/backend" on Vercel).` +
+        `Check NEXT_PUBLIC_API_URL (monorepo: same origin /_/backend; two projects: set NEXT_PUBLIC_VERCEL_API_MODE=split and full API URL).` +
         (snippet ? ` Response: ${snippet}` : ""),
       status: res.status,
     };
