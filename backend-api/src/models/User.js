@@ -940,6 +940,7 @@ export const User = {
     const used = Number(row.task_quota_used || 0);
     const firstTasksCompleted = Number(row.first_tasks_completed || 0);
     const newBalance = Number(row.balance ?? 0) + commission;
+    const completesAssignedCycle = !wasFirstTimeTask && used + 1 >= total;
 
     const userPatch = {
       balance: newBalance,
@@ -952,10 +953,18 @@ export const User = {
         userPatch.task_assignment_requested_at = row.task_assignment_requested_at || new Date().toISOString();
       }
     } else {
-      userPatch.task_quota_used = used + 1;
-      if (used + 1 >= total) {
-        userPatch.task_assignment_required = true;
-        userPatch.task_assignment_requested_at = row.task_assignment_requested_at || new Date().toISOString();
+      if (completesAssignedCycle) {
+        // User finished the full 30-task assigned cycle — auto-start next cycle (no admin action needed).
+        userPatch.task_quota_total = TASK_DAILY_LIMIT;
+        userPatch.task_quota_used = 0;
+        userPatch.task_assignment_required = false;
+        userPatch.task_assignment_requested_at = null;
+        userPatch.task_assignment_granted_at = new Date().toISOString();
+        userPatch.prime_orders = [];
+        userPatch.admin_deposit_profit_basis = 0;
+        userPatch.image_cycle_state = buildImageCycles();
+      } else {
+        userPatch.task_quota_used = used + 1;
       }
     }
 
@@ -1000,6 +1009,13 @@ export const User = {
 
     if (wasFirstTimeTask && firstTasksCompleted + 1 >= TASK_DAILY_LIMIT) {
       await insertActivityLog(userId, "First-time bonus tasks completed. No tasks available. Check your activity track");
+    }
+
+    if (completesAssignedCycle) {
+      // Reset per-cycle profit tracker (keep last_task_no/amount for history) and open task #1 for the next cycle.
+      await upsertReportProgress(userId, { cycle_instant_profit: 0 });
+      await insertActivityLog(userId, "Task cycle completed. New tasks are available.");
+      await this._insertOpenTask(userId, 1, false, []);
     }
 
     if (commission > 0) {

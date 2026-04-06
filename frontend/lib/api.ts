@@ -42,6 +42,26 @@ function isLoopbackApiUrl(urlStr: string): boolean {
   }
 }
 
+/**
+ * On an https site, `fetch` to `http://api...` is blocked (mixed content) and throws — same error as offline.
+ * Upgrade non-localhost http → https when the page is served over https.
+ */
+function normalizeHttpsForProdPage(base: string, pageIsLocal: boolean): string {
+  if (!base || pageIsLocal) return base;
+  if (typeof window === "undefined") return base;
+  if (window.location.protocol !== "https:") return base;
+  try {
+    const u = new URL(base);
+    if (u.protocol === "http:" && !isBrowserLocalHost(u.hostname)) {
+      u.protocol = "https:";
+      return u.href.replace(/\/$/, "");
+    }
+  } catch {
+    return base;
+  }
+  return base;
+}
+
 /** Two Vercel projects (frontend + backend-api): API is another host, not `/_/backend` on the web app. */
 function vercelSplitApiMode(): boolean {
   return process.env.NEXT_PUBLIC_VERCEL_API_MODE?.trim().toLowerCase() === "split";
@@ -61,15 +81,22 @@ function getApiBase(): string {
 
     if (split) {
       if (pageIsLocal) {
-        if (envBase && !isLoopbackApiUrl(envBase)) return envBase.replace(/\/$/, "");
-        return (envBase && envBase.replace(/\/$/, "")) || "http://localhost:4000";
+        if (envBase && !isLoopbackApiUrl(envBase)) {
+          return normalizeHttpsForProdPage(envBase.replace(/\/$/, ""), pageIsLocal);
+        }
+        return normalizeHttpsForProdPage(
+          (envBase && envBase.replace(/\/$/, "")) || "http://localhost:4000",
+          pageIsLocal
+        );
       }
       if (envBase && isLoopbackApiUrl(envBase)) return "";
       if (envBase) {
         const cleaned = envBase.replace(/\/$/, "");
         try {
           const u = new URL(cleaned);
-          if (u.protocol === "http:" || u.protocol === "https:") return cleaned;
+          if (u.protocol === "http:" || u.protocol === "https:") {
+            return normalizeHttpsForProdPage(cleaned, pageIsLocal);
+          }
         } catch {
           /* ignore */
         }
@@ -80,33 +107,40 @@ function getApiBase(): string {
     // Monorepo (one Vercel project + Services): same-origin `/_/backend`.
     // Common mistake: Vercel env copies .env.example with http://localhost:4000 — breaks login in production.
     if (!pageIsLocal && envBase && isLoopbackApiUrl(envBase)) {
-      return `${origin}/_/backend`;
+      return normalizeHttpsForProdPage(`${origin}/_/backend`, pageIsLocal);
     }
 
     if (envBase) {
       const cleaned = envBase.replace(/\/$/, "");
 
       if (!pageIsLocal) {
-        if (cleaned === "" || cleaned === "/") return `${origin}/_/backend`;
+        if (cleaned === "" || cleaned === "/") {
+          return normalizeHttpsForProdPage(`${origin}/_/backend`, pageIsLocal);
+        }
         if (cleaned.startsWith("/")) {
-          return cleaned.startsWith("/_/backend") ? cleaned : `${origin}/_/backend`;
+          return normalizeHttpsForProdPage(
+            cleaned.startsWith("/_/backend") ? cleaned : `${origin}/_/backend`,
+            pageIsLocal
+          );
         }
         try {
           const parsed = new URL(cleaned);
           const sameOrigin = parsed.origin === origin;
           const hasBackendPrefix =
             parsed.pathname === "/_/backend" || parsed.pathname.startsWith("/_/backend/");
-          if (sameOrigin && !hasBackendPrefix) return `${origin}/_/backend`;
+          if (sameOrigin && !hasBackendPrefix) {
+            return normalizeHttpsForProdPage(`${origin}/_/backend`, pageIsLocal);
+          }
         } catch {
           // Fall back to cleaned below.
         }
       }
 
-      return cleaned;
+      return normalizeHttpsForProdPage(cleaned, pageIsLocal);
     }
 
-    if (!pageIsLocal) return `${origin}/_/backend`;
-    return "http://localhost:4000";
+    if (!pageIsLocal) return normalizeHttpsForProdPage(`${origin}/_/backend`, pageIsLocal);
+    return normalizeHttpsForProdPage("http://localhost:4000", pageIsLocal);
   }
 
   // SSR / Node: no window — avoid localhost if a public site URL is configured
@@ -212,11 +246,11 @@ export async function api<T>(
       res = await fetch(`${apiBase}${path}`, { ...effectiveFetchOptions, headers });
     }
   } catch {
-    // Network-level failure (no HTTP response).
-    // Status 0 is a common sentinel for "unreachable server" from fetch wrappers.
+    // Network-level failure (no HTTP response): offline, CORS, mixed content (http API on https page), DNS, etc.
     return {
       error:
-        "Unable to reach the server. Please check your internet connection or try again in a moment.",
+        "Unable to reach the server. Please check your internet connection or try again in a moment. " +
+        "If you are on the live site, confirm Vercel → Settings → Environment Variables: NEXT_PUBLIC_API_URL must be the full HTTPS URL of your API (e.g. https://your-api.vercel.app).",
       status: 0,
     };
   }

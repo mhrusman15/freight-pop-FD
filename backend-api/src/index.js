@@ -11,7 +11,15 @@ const __filename = fileURLToPath(import.meta.url);
 
 const app = express();
 
-app.use(cors({ origin: true, credentials: true }));
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    maxAge: 86_400,
+  })
+);
 app.use(express.json());
 
 /** Browsers send `sec-fetch-mode: navigate` + `Accept: text/html...`; curl/API tools do not — serve JSON for those. */
