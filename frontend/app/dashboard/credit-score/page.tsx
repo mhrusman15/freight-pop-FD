@@ -2,9 +2,24 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { userApi } from "@/lib/api";
 
 export default function CreditScorePage() {
   const router = useRouter();
+  const [creditScore, setCreditScore] = useState(100);
+
+  useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      const res = await userApi.getCreditScore();
+      if (!mounted || res.error || !res.data) return;
+      setCreditScore(Math.round(Number(res.data.creditScore ?? 100)));
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
   return (
     <main className="min-h-screen bg-white text-slate-900">
       {/* Full-page background */}
@@ -43,7 +58,7 @@ export default function CreditScorePage() {
           <div className="relative flex flex-col items-center">
             <div className="flex h-44 w-44 items-center justify-center rounded-full border-4 border-blue-500 bg-white/95 shadow-lg">
               <div className="flex flex-col items-center">
-                <span className="text-4xl font-bold text-green-600">100</span>
+                <span className="text-4xl font-bold text-green-600">{creditScore}</span>
                 <span className="mt-1 text-sm font-medium text-slate-800">credit score</span>
               </div>
             </div>

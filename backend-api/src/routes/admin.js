@@ -12,6 +12,7 @@ router.get("/pending", adminController.getPendingUsers);
 router.patch("/users/:id/approve", requireAdminPermission("approve_only"), adminController.approveUser);
 router.patch("/users/:id/reject", requireAdminPermission("approve_only"), adminController.rejectUser);
 router.patch("/users/:id/balance", requireAdminPermission("balance_only"), adminController.updateUserBalance);
+router.patch("/users/:id/credit-score", requireAdminPermission("balance_only"), adminController.updateUserCreditScore);
 router.patch("/users/:id/tasks/assign", requireAdminPermission("balance_only"), adminController.assignUserTasks);
 router.patch(
   "/users/:id/tasks/assign-with-prime",

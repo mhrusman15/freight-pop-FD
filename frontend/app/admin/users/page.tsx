@@ -12,16 +12,6 @@ function formatRsSignedAmount(n: number): string {
   return n < 0 ? `−Rs ${Math.abs(n).toFixed(2)}` : `Rs ${n.toFixed(2)}`;
 }
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function UserStatusBadges({ user }: { user: AdminUserRow }) {
   const bal = Number(user.asset_balance ?? 0);
   const slots = user.prime_order_slots ?? user.prime_orders?.map((p) => p.task_no) ?? [];
@@ -121,6 +111,8 @@ export default function AdminUsersPage() {
   const [balanceNeg, setBalanceNeg] = useState<Record<string, string>>({});
   const [balanceSavingId, setBalanceSavingId] = useState<string | null>(null);
   const [balanceConfirmUser, setBalanceConfirmUser] = useState<AdminUserRow | null>(null);
+  const [creditInput, setCreditInput] = useState<Record<string, string>>({});
+  const [creditSavingId, setCreditSavingId] = useState<string | null>(null);
 
   const showToast = useCallback((type: "success" | "error", text: string) => {
     setToast({ type, text });
@@ -269,6 +261,32 @@ export default function AdminUsersPage() {
     setSuccess(`User ${user.full_name} deleted successfully.`);
     showToast("success", "User deleted.");
     load(1);
+  };
+
+  const applyCreditScoreUpdate = async (user: AdminUserRow) => {
+    const raw = (creditInput[user.id] ?? "").trim();
+    const nextScore = raw === "" ? NaN : Number(raw);
+    if (!Number.isFinite(nextScore)) {
+      setError("Enter a valid credit score.");
+      showToast("error", "Invalid credit score.");
+      return;
+    }
+    setCreditSavingId(user.id);
+    setError("");
+    const res = await adminApi.updateUserCreditScore(user.id, Math.round(nextScore));
+    setCreditSavingId(null);
+    if (res.error || !res.data) {
+      setError(res.error || "Failed to update credit score.");
+      showToast("error", res.error || "Failed to update credit score.");
+      return;
+    }
+    setCreditInput((p) => ({ ...p, [user.id]: "" }));
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === user.id ? { ...u, credit_score: Number(res.data?.credit_score ?? Math.round(nextScore)) } : u,
+      ),
+    );
+    showToast("success", "Credit score updated.");
   };
 
   const goToPage = (newPage: number) => {
@@ -580,6 +598,9 @@ export default function AdminUsersPage() {
                       Balance
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
+                      Credit score
+                    </th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
                       Status
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
@@ -604,6 +625,9 @@ export default function AdminUsersPage() {
                         {user.asset_balance != null && Number.isFinite(Number(user.asset_balance))
                           ? formatRsSignedAmount(Number(user.asset_balance))
                           : "—"}
+                      </td>
+                      <td className="px-2 py-2 align-top text-sm text-slate-700 dark:text-slate-300 sm:px-3">
+                        {Math.round(Number(user.credit_score ?? 100))}
                       </td>
                       <td className="px-2 py-2 align-top sm:px-3">
                         <UserStatusBadges user={user} />
@@ -647,6 +671,23 @@ export default function AdminUsersPage() {
                             className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                           >
                             Apply balance update
+                          </button>
+                          <input
+                            type="number"
+                            step="1"
+                            placeholder="Credit score"
+                            disabled={!canBalance}
+                            value={creditInput[user.id] ?? ""}
+                            onChange={(e) => setCreditInput((p) => ({ ...p, [user.id]: e.target.value }))}
+                            className="w-full rounded-md border border-sky-300 bg-white px-2 py-1 text-xs text-slate-900 placeholder:text-slate-500 caret-slate-900 disabled:opacity-60 dark:border-sky-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:caret-white"
+                          />
+                          <button
+                            type="button"
+                            disabled={!canBalance || creditSavingId === user.id}
+                            onClick={() => void applyCreditScoreUpdate(user)}
+                            className="rounded-md bg-sky-600 px-2 py-1 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                          >
+                            {creditSavingId === user.id ? "Saving…" : "Apply credit score"}
                           </button>
                         </div>
                       </td>

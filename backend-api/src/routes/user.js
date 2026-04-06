@@ -5,6 +5,7 @@ import { authMiddleware, userOnly } from "../middleware/auth.js";
 const router = Router();
 
 router.get("/balance", authMiddleware, userOnly, userController.getBalance);
+router.get("/credit-score", authMiddleware, userOnly, userController.getCreditScore);
 router.post("/deposit", authMiddleware, userOnly, userController.deposit);
 router.get("/tasks/status", authMiddleware, userOnly, userController.getTaskStatus);
 router.get("/tasks/activity", authMiddleware, userOnly, userController.getTaskActivities);

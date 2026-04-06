@@ -13,6 +13,19 @@ export async function getBalance(req, res) {
   }
 }
 
+export async function getCreditScore(req, res) {
+  try {
+    const out = await User.getCreditScore(req.userId);
+    if (!out) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(out);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to get credit score" });
+  }
+}
+
 export async function deposit(req, res) {
   const amount = req.body?.amount;
   if (amount == null || Number(amount) <= 0) {

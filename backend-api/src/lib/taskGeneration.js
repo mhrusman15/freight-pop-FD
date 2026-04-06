@@ -41,6 +41,17 @@ const TASK_IMAGE_POOL = [
   "/assets/tasks/water-bottle.jpg",
 ];
 
+const PRIME_TASK_IMAGE_POOL = [
+  "/assets/tasks/prime-Shoes-combo.jpg",
+  "/assets/tasks/prime-Samsung-LED.jpg",
+  "/assets/tasks/prime-watch-gold.jpg",
+  "/assets/tasks/Prime-Yamaha-Piano.jpg",
+  "/assets/tasks/prime-iphone-17 pro.jpg",
+  "/assets/tasks/prime-iphone 17 pro max.jpg",
+  "/assets/tasks/Prime-Piano.jpg",
+  "/assets/tasks/Prime-luxury watch box.jpg",
+];
+
 /** Realistic Rs ranges by product category (filename/title hints). Commission = task_price × (bps/10000), clamped. */
 const DEFAULT_BAND = {
   min: 1000,
@@ -114,6 +125,14 @@ const FICTIONAL_PRODUCT_NAMES = {
   "toolbox.jpg": "CraftMaster Toolkit",
   "voltmeter.jpg": "PrecisionMeter Pro",
   "water-bottle.jpg": "AquaPure Flask",
+  "prime-Shoes-combo.jpg": "Prime Shoes Combo",
+  "prime-Samsung-LED.jpg": "Prime Samsung LED",
+  "prime-watch-gold.jpg": "Prime Watch Gold",
+  "Prime-Yamaha-Piano.jpg": "Prime Yamaha Piano",
+  "prime-iphone-17 pro.jpg": "Prime iPhone 17 Pro",
+  "prime-iphone 17 pro max.jpg": "Prime iPhone 17 Pro Max",
+  "Prime-Piano.jpg": "Prime Piano",
+  "Prime-luxury watch box.jpg": "Prime Luxury Watch Box",
 };
 
 const COMMISSION_TIERS_HARDCODED = {
@@ -233,7 +252,9 @@ export function stablePrimeGrabProduct(userId, taskNo, cycleKey) {
     h ^= seed.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  const pool = TASK_IMAGE_POOL.length ? TASK_IMAGE_POOL : ["/assets/tasks/Man-Shoes.jpg"];
+  const pool = PRIME_TASK_IMAGE_POOL.length
+    ? PRIME_TASK_IMAGE_POOL
+    : ["/assets/tasks/prime-Shoes-combo.jpg"];
   const idx = Math.abs(h) % pool.length;
   const image = pool[idx];
   return { image, title: imagePathToTitle(image) };

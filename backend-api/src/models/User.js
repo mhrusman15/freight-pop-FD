@@ -66,6 +66,7 @@ function mapProfile(row) {
     role: row.role,
     admin_permissions: row.admin_permissions || null,
     asset_balance: row.balance != null ? Number(row.balance) : 0,
+    credit_score: Number(row.credit_score ?? 100),
     created_at: row.created_at,
   };
 }
@@ -220,6 +221,7 @@ export const User = {
         protected_reserve: Number(defaultReserve) || 20000,
         initial_reserve_consumed: false,
         commission_tier: 0,
+        credit_score: 100,
       })
       .select("id, full_name, email, phone, is_approved, rejected, created_at")
       .single();
@@ -546,6 +548,7 @@ export const User = {
       phone: u.phone,
       status: accountStatusFromRow(u),
       asset_balance: Number(u.balance ?? 0),
+      credit_score: Number(u.credit_score ?? 100),
       task_quota_total: u.task_quota_total ?? TASK_DAILY_LIMIT,
       task_quota_used: u.task_quota_used ?? 0,
       task_assignment_required: Boolean(u.task_assignment_required),
@@ -577,6 +580,30 @@ export const User = {
       full_name: row.full_name,
       email: row.email,
     };
+  },
+
+  async getCreditScore(userId) {
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    const creditScore = Math.round(Number(row.credit_score ?? 100));
+    return {
+      creditScore,
+      deltaAmount: creditScore - 100,
+    };
+  },
+
+  async updateCreditScore(userId, creditScore) {
+    const score = Math.round(Number(creditScore));
+    if (!Number.isFinite(score)) throw new Error("Invalid credit score");
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update({ credit_score: score })
+      .eq("id", userId)
+      .eq("role", "user")
+      .select("credit_score")
+      .maybeSingle();
+    if (error) throw error;
+    return data ? Number(data.credit_score) : null;
   },
 
   async updatePassword(userId, oldPasswordPlain, newPasswordPlain) {
@@ -669,6 +696,7 @@ export const User = {
         rejected: false,
         balance: 0,
         task_assignment_granted_at: nowIso(),
+        credit_score: 100,
       })
       .select("*")
       .single();
@@ -713,6 +741,7 @@ export const User = {
         rejected: false,
         balance: 0,
         task_assignment_granted_at: nowIso(),
+        credit_score: 100,
       })
       .select("*")
       .single();

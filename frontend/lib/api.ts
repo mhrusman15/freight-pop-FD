@@ -298,6 +298,7 @@ export type AdminUserRow = {
   created_at: string;
   updated_at?: string;
   asset_balance?: number;
+  credit_score?: number;
   task_quota_total?: number;
   task_quota_used?: number;
   task_assignment_required?: boolean;
@@ -387,6 +388,12 @@ export const adminApi = {
         negativeRuntime: negativeRuntime != null && negativeRuntime > 0 ? negativeRuntime : 0,
         value: positiveAdd,
       }),
+    });
+  },
+  updateUserCreditScore(id: string, creditScore: number) {
+    return api<{ credit_score: number; userId: string }>(`/api/admin/users/${id}/credit-score`, {
+      method: "PATCH",
+      body: JSON.stringify({ creditScore }),
     });
   },
   deleteUser(id: string) {
@@ -508,6 +515,9 @@ export type UserOpenTaskResult = {
 
 /** User balance (requires auth). Uses token from localStorage by default. */
 export const userApi = {
+  getCreditScore() {
+    return api<{ creditScore: number; deltaAmount: number }>("/api/user/credit-score", { suppressAuthRedirect: true });
+  },
   getBalance() {
     // Balance checks are often background refreshes (focus/navigation).
     // Do not force logout/redirect on a single 401 from this endpoint.

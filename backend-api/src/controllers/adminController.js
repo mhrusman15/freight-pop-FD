@@ -65,6 +65,29 @@ export async function updateUserBalance(req, res) {
   }
 }
 
+export async function updateUserCreditScore(req, res) {
+  try {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+    const raw = req.body?.creditScore ?? req.body?.credit_score;
+    const score = Number(raw);
+    if (!Number.isFinite(score)) {
+      return res.status(400).json({ error: "Invalid credit score" });
+    }
+    const cleanScore = Math.round(score);
+    const updated = await User.updateCreditScore(id, cleanScore);
+    if (updated == null) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json({ credit_score: updated, userId: id });
+  } catch (err) {
+    console.error("Update credit score error:", err);
+    res.status(500).json({ error: "Failed to update credit score" });
+  }
+}
+
 export async function getAdmins(req, res) {
   try {
     const admins = await User.getAdmins();

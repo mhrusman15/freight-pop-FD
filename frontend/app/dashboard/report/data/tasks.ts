@@ -66,6 +66,16 @@ const imageToCategory: Record<string, Category> = Object.entries(categoryImageMa
 );
 
 const allTaskImages = Object.values(categoryImageMap).flat();
+const PRIME_TASK_IMAGES = [
+  "prime-Shoes-combo.jpg",
+  "prime-Samsung-LED.jpg",
+  "prime-watch-gold.jpg",
+  "Prime-Yamaha-Piano.jpg",
+  "prime-iphone-17 pro.jpg",
+  "prime-iphone 17 pro max.jpg",
+  "Prime-Piano.jpg",
+  "Prime-luxury watch box.jpg",
+];
 let taskSequence: string[] = [];
 let taskSequenceIndex = 0;
 
@@ -112,6 +122,25 @@ export const getNextTaskImage = (): string => {
   taskSequenceIndex += 1;
   return `/assets/tasks/${next}`;
 };
+
+export const getRandomPrimeTaskImage = (): string => {
+  const pool = PRIME_TASK_IMAGES.length ? PRIME_TASK_IMAGES : allTaskImages;
+  const next = pool[Math.floor(Math.random() * pool.length)] ?? allTaskImages[0];
+  return `/assets/tasks/${next}`;
+};
+
+export function createRandomHiddenRewardGift(id: number): Task {
+  const image = getRandomPrimeTaskImage();
+  return {
+    id,
+    category: "bag",
+    image,
+    title: getTitleFromImageName(image),
+    price: 0,
+    commission: 0,
+    rewards: 1,
+  };
+}
 
 export const getRandomCategory = (): Category =>
   categories[Math.floor(Math.random() * categories.length)];

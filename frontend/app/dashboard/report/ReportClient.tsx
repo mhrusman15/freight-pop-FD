@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   TOTAL_TASKS,
+  createRandomHiddenRewardGift,
   createRandomTask,
+  getRandomPrimeTaskImage,
   getNextTaskImage,
   getTitleFromImageName,
   type Task,
@@ -18,6 +20,8 @@ import {
   type UserTaskStatus,
 } from "@/lib/api";
 import { getUserData } from "@/lib/auth-store";
+
+const HIDDEN_REWARD_TRIGGER_TASK_NO = 28;
 
 type ActivityStatus = "pending" | "completed";
 type ActivityEntry = {
@@ -138,7 +142,7 @@ function ModalShell({
 }
 
 function pickPrimeGrabProduct(): { image: string; title: string } {
-  const image = getNextTaskImage();
+  const image = getRandomPrimeTaskImage();
   return { image, title: getTitleFromImageName(image) };
 }
 
@@ -396,6 +400,7 @@ export function ReportClient() {
   const [isConfirming, setIsConfirming] = useState(false);
   const [taskStatus, setTaskStatus] = useState<UserTaskStatus | null>(null);
   const [hasHydratedProgress, setHasHydratedProgress] = useState(false);
+  const [hasShownHiddenRewardThisCycle, setHasShownHiddenRewardThisCycle] = useState(false);
   const [adminAssignReceiptDone, setAdminAssignReceiptDone] = useState(false);
   const [lastAssignmentGrantAt, setLastAssignmentGrantAt] = useState<string | null>(null);
   const [waitingForAdminReassign, setWaitingForAdminReassign] = useState(false);
@@ -617,16 +622,19 @@ export function ReportClient() {
           if (noTasksUntilAdmin) {
             setCurrentTaskIndex(total - 1);
             setCompletedInCycle(total);
+            setHasShownHiddenRewardThisCycle(true);
           } else {
             const serverTaskIndex = currentTaskNoFromServer > 0 ? currentTaskNoFromServer - 1 : -1;
             if (serverTaskIndex >= 0) {
               const idx = Math.min(total - 1, serverTaskIndex);
               setCurrentTaskIndex(idx);
               setCompletedInCycle(Math.max(0, idx));
+              setHasShownHiddenRewardThisCycle(idx >= HIDDEN_REWARD_TRIGGER_TASK_NO);
             } else {
               const mod = completed % total;
               setCurrentTaskIndex(mod);
               setCompletedInCycle(mod);
+              setHasShownHiddenRewardThisCycle(mod >= HIDDEN_REWARD_TRIGGER_TASK_NO);
             }
           }
           setInstantProfit(Number.isFinite(cycleProfit) ? cycleProfit : 0);
@@ -643,6 +651,7 @@ export function ReportClient() {
             setAdminAssignReceiptDone(false);
             setCompletedInCycle(0);
             setCurrentTaskIndex(0);
+            setHasShownHiddenRewardThisCycle(false);
             setWaitingForAdminReassign(false);
             setActivityPendingHiddenUntilAdminPersisted(false);
             setShowWaitForAdminAfterGiftContinue(false);
@@ -1078,13 +1087,19 @@ export function ReportClient() {
       });
       setCompletedInCycle((prev) => {
         const next = prev + 1;
+        if (next === HIDDEN_REWARD_TRIGGER_TASK_NO && !hasShownHiddenRewardThisCycle) {
+          setSelectedGiftBox(null);
+          setGiftRewardTask(null);
+          setIsRewardModalOpen(true);
+          setHasShownHiddenRewardThisCycle(true);
+        }
         if (next >= total) {
           setActivePendingEntryId(null);
           setSelectedGiftBox(null);
           setGiftRewardTask(null);
-          setIsRewardModalOpen(true);
           setAdminAssignReceiptDone(false);
           setWaitingForAdminReassign(true);
+          setHasShownHiddenRewardThisCycle(false);
           return total;
         }
         return next;
@@ -1106,7 +1121,7 @@ export function ReportClient() {
       return;
     }
     if (selectedGiftBox !== null) return;
-    const reward = createRandomTask(Math.floor(Math.random() * total) + 1);
+    const reward = createRandomHiddenRewardGift(Math.floor(Math.random() * total) + 1);
     setSelectedGiftBox(boxIndex);
     setGiftRewardTask(reward);
     if (completedInCycle >= total) {
@@ -1115,12 +1130,7 @@ export function ReportClient() {
   };
 
   const closeRewardModal = (opts?: { fromGiftContinue?: boolean }) => {
-    if (selectedGiftBox !== null) {
-      setActivityPendingHiddenUntilAdminPersisted(true);
-    }
-    if (opts?.fromGiftContinue) {
-      setShowWaitForAdminAfterGiftContinue(true);
-    }
+    void opts;
     setIsRewardModalOpen(false);
     setSelectedGiftBox(null);
     setGiftRewardTask(null);
@@ -1590,7 +1600,7 @@ export function ReportClient() {
                     {giftRewardTask.title}
                   </p>
                   <p className="text-xs text-slate-600">
-                    Bonus: {currencyRs(giftRewardTask.commission)}
+                    15x Boost on this gift
                   </p>
                 </div>
               </div>
