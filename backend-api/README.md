@@ -7,7 +7,7 @@ Backend uses **Supabase** (PostgreSQL + Auth). All app data is stored in your Su
 If this repo is a monorepo, do **not** leave **Root Directory** empty for an API-only project: Vercel will run the root `package.json` `build` script and deploy the **Next.js frontend** instead of this API.
 
 1. Vercel → your API project → **Settings** → **General** → **Root Directory** → `backend-api` (Save).
-2. Redeploy. Routing uses **`vercel.json`** rewrites (all paths → `/api/index`) and **`api/index.js`** (`serverless-http` + Express app from `src/index.js`).
+2. Redeploy. Routing uses **`vercel.json`** rewrites (`/health` → `/api/health`, everything else → `/api/index`). **`api/index.js`** exports the Express app **directly** (Vercel runs Express natively — do not use `serverless-http`; it can cause 504 timeouts).
 3. Set environment variables on that project: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and any others from `backend-api` `.env.example`.
 
 4. **URLs:** The API has **no** browser `/login` page. Use `GET /` or `GET /health` to verify the deployment (`{ "ok": true }`). Login is `POST /api/auth/login` (called by your Next app, not by opening `/login` in the API host’s tab).
