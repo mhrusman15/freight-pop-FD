@@ -269,6 +269,7 @@ export const User = {
       .select("task_no")
       .eq("user_id", userId)
       .eq("status", "open")
+      .order("created_at", { ascending: false })
       .limit(1);
     const openRow = openTaskRows?.[0];
     const currentTaskNo = computeCurrentTaskNoFromRow(row, openRow);
@@ -793,6 +794,7 @@ export const User = {
       .select("is_prime, task_no")
       .eq("user_id", userId)
       .eq("status", "open")
+      .order("created_at", { ascending: false })
       .limit(1);
     const openRow = openTaskRows?.[0];
 
@@ -859,7 +861,12 @@ export const User = {
   },
 
   async markTaskCompleted(userId, activityId = null) {
-    let query = supabaseAdmin.from("user_tasks").select("*").eq("user_id", userId).eq("status", "open");
+    let query = supabaseAdmin
+      .from("user_tasks")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "open")
+      .order("created_at", { ascending: false });
     if (activityId) query = query.eq("id", activityId);
     const { data: openRows, error: findErr } = await query.limit(1);
     if (findErr) throw findErr;
@@ -1136,6 +1143,7 @@ export const User = {
       .select("*")
       .eq("user_id", userId)
       .eq("status", "open")
+      .order("created_at", { ascending: false })
       .limit(1);
     const currentPending = openList?.[0];
 
@@ -1265,6 +1273,7 @@ export const User = {
         .select("*")
         .eq("user_id", userId)
         .eq("status", "open")
+        .order("created_at", { ascending: false })
         .limit(1);
       const currentPending = openList?.[0];
       if (currentPending) {
@@ -1373,6 +1382,7 @@ export const User = {
       .select("*")
       .eq("user_id", userId)
       .eq("status", "open")
+      .order("created_at", { ascending: false })
       .limit(1);
     const existingPending = openList?.[0];
     if (existingPending) {

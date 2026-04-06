@@ -1,9 +1,13 @@
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import userRoutes from "./routes/user.js";
 import { config, assertSupabaseConfig } from "./config.js";
+
+const __filename = fileURLToPath(import.meta.url);
 
 const app = express();
 
@@ -29,8 +33,10 @@ function start() {
   });
 }
 
-// Local runtime entrypoint (do not start a listener in Vercel serverless runtime).
-if (!process.env.VERCEL) {
+// Start HTTP server only when this file is run directly (`node src/index.js`), not when imported (e.g. Vercel `api/index.js`).
+const isMainModule =
+  Boolean(process.argv[1]) && path.resolve(process.argv[1]) === path.resolve(__filename);
+if (isMainModule) {
   start();
 }
 

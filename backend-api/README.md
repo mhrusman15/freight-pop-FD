@@ -7,8 +7,12 @@ Backend uses **Supabase** (PostgreSQL + Auth). All app data is stored in your Su
 If this repo is a monorepo, do **not** leave **Root Directory** empty for an API-only project: Vercel will run the root `package.json` `build` script and deploy the **Next.js frontend** instead of this API.
 
 1. Vercel → your API project → **Settings** → **General** → **Root Directory** → `backend-api` (Save).
-2. Redeploy. Build uses `backend-api/vercel.json` (serverless Node, `api/index.js`).
+2. Redeploy. Routing uses **`vercel.json`** rewrites (all paths → `/api/index`) and **`api/index.js`** (`serverless-http` + Express app from `src/index.js`).
 3. Set environment variables on that project: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and any others from `backend-api` `.env.example`.
+
+4. **URLs:** The API has **no** browser `/login` page. Use `GET /` or `GET /health` to verify the deployment (`{ "ok": true }`). Login is `POST /api/auth/login` (called by your Next app, not by opening `/login` in the API host’s tab).
+
+5. **If `/health` shows “404 | This page could not be found.” (Next.js style):** that HTML is **not** this API. The deployment is still a **Next.js** app or the wrong project. Fix: **Root Directory = `backend-api`**, **Framework preset = Other** (not Next.js), clear **Output Directory**, redeploy. A correct API response is **JSON** `{"ok":true}`.
 
 For **one** Vercel project that serves both the Next app and this API under `/_/backend`, use the repo root and root `vercel.json` (**experimental Services**), not a separate `*-backend` project with root directory `.`.
 

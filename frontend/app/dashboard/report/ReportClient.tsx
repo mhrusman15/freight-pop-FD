@@ -446,6 +446,10 @@ export function ReportClient() {
     taskStatus != null &&
     !taskStatus.canPerformTasks &&
     Boolean(taskStatus.requiresAdminAssignment);
+  const awaitingAdminHardLock =
+    taskStatus != null &&
+    Boolean(taskStatus.requiresAdminAssignment) &&
+    Math.max(0, Number(taskStatus.currentTaskNo ?? 0) || 0) <= 0;
 
   /**
    * Raw DB wallet balance — same source as prime recharge checks and task completion rules.
@@ -501,11 +505,11 @@ export function ReportClient() {
     awaitingAdminOnly || activityPendingHiddenUntilAdmin || waitingForAdminReassign;
 
   const progressLabel = useMemo(() => {
-    if (awaitingAdminOnly || showWaitForAdminAfterGiftContinue) {
+    if (awaitingAdminOnly || awaitingAdminHardLock || showWaitForAdminAfterGiftContinue) {
       return "Wait for admin for the next cycle";
     }
     return `Task ${safeIndex + 1} / ${total}`;
-  }, [awaitingAdminOnly, showWaitForAdminAfterGiftContinue, safeIndex, total]);
+  }, [awaitingAdminOnly, awaitingAdminHardLock, showWaitForAdminAfterGiftContinue, safeIndex, total]);
   /** Negative account balance (admin runtime): block task/activity actions. */
   const accountBalanceInsufficient = rawWalletBalance < 0;
 
@@ -590,11 +594,14 @@ export function ReportClient() {
       if (res.data) {
         setTaskStatus(res.data);
         const noTasksUntilAdmin =
-          !res.data.canPerformTasks && Boolean(res.data.requiresAdminAssignment);
+          (!res.data.canPerformTasks && Boolean(res.data.requiresAdminAssignment)) ||
+          (Boolean(res.data.requiresAdminAssignment) &&
+            Math.max(0, Number(res.data.currentTaskNo ?? 0) || 0) <= 0);
 
         if (!hasHydratedProgress) {
           const progress = res.data.reportProgress;
           const lastTaskNo = Math.max(0, Number(progress?.lastTaskNo ?? 0) || 0);
+          const currentTaskNoFromServer = Math.max(0, Number(res.data.currentTaskNo ?? 0) || 0);
           const cycleProfit = Number(
             res.data.instantProfit ??
               res.data.instant_profit ??
@@ -611,22 +618,35 @@ export function ReportClient() {
             setCurrentTaskIndex(total - 1);
             setCompletedInCycle(total);
           } else {
-            const mod = completed % total;
-            setCurrentTaskIndex(mod);
-            setCompletedInCycle(mod);
+            const serverTaskIndex = currentTaskNoFromServer > 0 ? currentTaskNoFromServer - 1 : -1;
+            if (serverTaskIndex >= 0) {
+              const idx = Math.min(total - 1, serverTaskIndex);
+              setCurrentTaskIndex(idx);
+              setCompletedInCycle(Math.max(0, idx));
+            } else {
+              const mod = completed % total;
+              setCurrentTaskIndex(mod);
+              setCompletedInCycle(mod);
+            }
           }
           setInstantProfit(Number.isFinite(cycleProfit) ? cycleProfit : 0);
           setHasHydratedProgress(true);
         }
         const grantedAt = res.data.taskAssignmentGrantedAt ?? null;
-        if (grantedAt && grantedAt !== lastAssignmentGrantAt) {
-          setLastAssignmentGrantAt(grantedAt);
-          setAdminAssignReceiptDone(false);
-          setCompletedInCycle(0);
-          setCurrentTaskIndex(0);
-          setWaitingForAdminReassign(false);
-          setActivityPendingHiddenUntilAdminPersisted(false);
-          setShowWaitForAdminAfterGiftContinue(false);
+        if (grantedAt) {
+          // Do not reset on first load/login for an already-existing cycle.
+          // Reset only when admin grants a NEW assignment after we've already tracked one.
+          if (lastAssignmentGrantAt == null) {
+            setLastAssignmentGrantAt(grantedAt);
+          } else if (grantedAt !== lastAssignmentGrantAt) {
+            setLastAssignmentGrantAt(grantedAt);
+            setAdminAssignReceiptDone(false);
+            setCompletedInCycle(0);
+            setCurrentTaskIndex(0);
+            setWaitingForAdminReassign(false);
+            setActivityPendingHiddenUntilAdminPersisted(false);
+            setShowWaitForAdminAfterGiftContinue(false);
+          }
         }
         if (res.data.canPerformTasks && !res.data.requiresAdminAssignment) {
           setActivityPendingHiddenUntilAdminPersisted(false);
@@ -743,9 +763,35 @@ export function ReportClient() {
   useEffect(() => {
     if (!taskStatus) return;
     const needWait =
-      !taskStatus.canPerformTasks && Boolean(taskStatus.requiresAdminAssignment);
+      (!taskStatus.canPerformTasks && Boolean(taskStatus.requiresAdminAssignment)) ||
+      (Boolean(taskStatus.requiresAdminAssignment) &&
+        Math.max(0, Number(taskStatus.currentTaskNo ?? 0) || 0) <= 0);
     setWaitingForAdminReassign(needWait);
   }, [taskStatus]);
+
+  useEffect(() => {
+    if (!taskStatus || !hasHydratedProgress) return;
+    const noTasksUntilAdmin =
+      (!taskStatus.canPerformTasks && Boolean(taskStatus.requiresAdminAssignment)) ||
+      (Boolean(taskStatus.requiresAdminAssignment) &&
+        Math.max(0, Number(taskStatus.currentTaskNo ?? 0) || 0) <= 0);
+    if (noTasksUntilAdmin) {
+      setCurrentTaskIndex(total - 1);
+      setCompletedInCycle(total);
+      return;
+    }
+    const serverTaskNo = Math.max(0, Number(taskStatus.currentTaskNo ?? 0) || 0);
+    if (serverTaskNo <= 0) return;
+    const idx = Math.min(total - 1, serverTaskNo - 1);
+    setCurrentTaskIndex(idx);
+    setCompletedInCycle(Math.max(0, idx));
+  }, [
+    taskStatus?.currentTaskNo,
+    taskStatus?.canPerformTasks,
+    taskStatus?.requiresAdminAssignment,
+    hasHydratedProgress,
+    total,
+  ]);
 
   useEffect(() => {
     if (!accountBalanceInsufficient) return;
@@ -796,6 +842,7 @@ export function ReportClient() {
   const openTaskModal = () => {
     if (
       awaitingAdminOnly ||
+      awaitingAdminHardLock ||
       waitingForAdminReassign ||
       showWaitForAdminAfterGiftContinue
     ) {
@@ -1309,6 +1356,7 @@ export function ReportClient() {
           disabled={
             accountBalanceInsufficient ||
             awaitingAdminOnly ||
+            awaitingAdminHardLock ||
             waitingForAdminReassign ||
             showWaitForAdminAfterGiftContinue ||
             (!primeRechargeShortfall &&

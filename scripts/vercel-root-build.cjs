@@ -17,7 +17,7 @@ if (isVercel && !process.env.FORCE_FRONTEND_ROOT_BUILD && /-backend$/i.test(proj
       `Your project name is "${project}" (matches *-backend).\n\n` +
       "Fix — Vercel → Project → Settings → General → Root Directory → set to:\n" +
       "  backend-api\n" +
-      "Then redeploy. The API uses backend-api/vercel.json (@vercel/node).\n\n" +
+      "Then redeploy. The API is Express in backend-api/src/index.js (Vercel zero-config).\n\n" +
       "Alternatively use one project with Services from the repo root (see root vercel.json).\n" +
       "To override this check (not recommended): set env FORCE_FRONTEND_ROOT_BUILD=1\n"
   );
