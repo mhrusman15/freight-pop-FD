@@ -1,5 +1,6 @@
 import { User } from "../models/User.js";
 import { isValidUuid } from "../utils/uuid.js";
+import { getPrimeProductByKey, TASK_DAILY_LIMIT } from "../lib/taskGeneration.js";
 
 export async function getStats(req, res) {
   try {
@@ -242,7 +243,36 @@ export async function assignTasksWithPrime(req, res) {
       return res.status(400).json({ error: "Invalid user id" });
     }
     const primeOrders = Array.isArray(req.body?.primeOrders) ? req.body.primeOrders : [];
-    const status = await User.adminAssignTasksWithPrime(id, primeOrders);
+    for (const o of primeOrders) {
+      if (o?.product_key == null || String(o.product_key).trim() === "") continue;
+      if (!getPrimeProductByKey(o.product_key)) {
+        return res.status(400).json({ error: `Invalid product key for task ${Number(o?.task_no) || "?"}` });
+      }
+    }
+    let hiddenGiftPayload = null;
+    const hg = req.body?.hiddenGift;
+    if (hg != null && typeof hg === "object") {
+      let taskNo = null;
+      const rawTn = hg.task_no;
+      if (rawTn !== undefined && rawTn !== null && rawTn !== "") {
+        const tn = Math.floor(Number(rawTn));
+        if (!Number.isFinite(tn) || tn < 0 || tn > TASK_DAILY_LIMIT) {
+          return res.status(400).json({ error: "Hidden gift task must be between 0 and 30 (0 = off)" });
+        }
+        taskNo = tn;
+      }
+      let productKey = null;
+      const pk = hg.product_key;
+      if (pk != null && String(pk).trim() !== "") {
+        const key = String(pk).trim();
+        if (!getPrimeProductByKey(key)) {
+          return res.status(400).json({ error: "Invalid hidden gift product key" });
+        }
+        productKey = key;
+      }
+      hiddenGiftPayload = { task_no: taskNo, product_key: productKey };
+    }
+    const status = await User.adminAssignTasksWithPrime(id, primeOrders, hiddenGiftPayload);
     if (!status) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -308,5 +338,41 @@ export async function deleteUser(req, res) {
   } catch (err) {
     console.error("Delete user error:", err);
     res.status(500).json({ error: "Failed to delete user" });
+  }
+}
+
+export async function approveWithdrawal(req, res) {
+  try {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+    const out = await User.adminApproveWithdrawal(id);
+    if (!out) return res.status(404).json({ error: "User not found" });
+    if (!out.ok && out.code === "NO_PENDING") return res.status(400).json({ error: "No pending withdrawal" });
+    if (!out.ok && out.code === "INSUFFICIENT_BALANCE") {
+      return res.status(400).json({ error: "Insufficient balance for this withdrawal" });
+    }
+    res.json({ message: "Withdrawal approved" });
+  } catch (err) {
+    console.error("Approve withdrawal error:", err);
+    res.status(500).json({ error: "Failed to approve withdrawal" });
+  }
+}
+
+export async function rejectWithdrawal(req, res) {
+  try {
+    const id = req.params.id;
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+    const note = String(req.body?.note || "");
+    const out = await User.adminRejectWithdrawal(id, note);
+    if (!out) return res.status(404).json({ error: "User not found" });
+    if (!out.ok && out.code === "NO_PENDING") return res.status(400).json({ error: "No pending withdrawal" });
+    res.json({ message: "Withdrawal rejected" });
+  } catch (err) {
+    console.error("Reject withdrawal error:", err);
+    res.status(500).json({ error: "Failed to reject withdrawal" });
   }
 }

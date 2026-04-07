@@ -1,5 +1,8 @@
 import { supabaseAdmin, supabaseAuth } from "../lib/supabaseClient.js";
 import {
+  computeBaseCommissionFromTaskPrice,
+  getPrimeProductByKey,
+  IMAGE_CYCLE_VERSION,
   TASK_DAILY_LIMIT,
   TASK_IMAGE_POOL,
   buildEmailCandidates,
@@ -8,7 +11,8 @@ import {
   makeActivityTask,
   makeUserTaskFromState,
   nowIso,
-  stablePrimeGrabProduct,
+  randomInt,
+  randomNonPrimeProductForPrimeTask,
 } from "../lib/taskGeneration.js";
 import {
   getActivePrime,
@@ -26,16 +30,21 @@ function getCommissionTierFromRow(row) {
   return Math.floor(t);
 }
 
-/** Stable key so prime grab product stays the same for a 30-task cycle. */
-function primeGrabCycleKey(row) {
-  const g = row?.task_assignment_granted_at;
-  if (g) return `g:${String(g)}`;
-  return `f:${String(row?.id ?? "")}`;
-}
-
 function isMissingUsersColumnError(err, columnName) {
   const msg = String(err?.message || "");
   return Boolean(err && err.code === "PGRST204" && msg.includes(`'${columnName}' column`) && msg.includes("'users'"));
+}
+
+const DEFAULT_HIDDEN_GIFT_TASK_NO = 28;
+
+/** @returns {number} 0 = disabled; 1–30 = trigger after that many tasks completed in cycle */
+function resolveHiddenGiftTaskNoFromRow(row) {
+  const v = row?.hidden_gift_task_no;
+  if (v === 0 || v === "0") return 0;
+  if (v == null || v === "") return DEFAULT_HIDDEN_GIFT_TASK_NO;
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_HIDDEN_GIFT_TASK_NO;
+  return Math.min(TASK_DAILY_LIMIT, Math.max(1, n));
 }
 
 /** Scales task commission using the last admin credit (linear, max +50%). */
@@ -46,6 +55,37 @@ function applyAdminDepositProfitBoost(commission, row) {
   if (basis <= 0) return Number(c.toFixed(2));
   const factor = 1 + Math.min(basis / 400000, 0.5);
   return Number((c * factor).toFixed(2));
+}
+
+function buildPrimeTaskFromProductOption(taskNo, option, userBalance) {
+  const balRaw = Number(userBalance);
+  const bal = Number.isFinite(balRaw) ? Math.max(0, balRaw) : Number(option.max);
+  let low = Math.max(0, Math.floor(Number(option.min) || 0));
+  let high = Math.max(low, Math.floor(Number(option.max) || 0));
+  high = Math.min(high, bal);
+  if (high < low) {
+    low = Math.min(low, bal);
+    high = bal;
+  }
+  let quantityRs;
+  if (bal <= 0) {
+    quantityRs = 0;
+  } else if (low >= high) {
+    quantityRs = high;
+  } else {
+    quantityRs = randomInt(Math.max(1, low), high);
+  }
+  quantityRs = Number(Math.min(quantityRs, bal).toFixed(2));
+  const baseCommission = computeBaseCommissionFromTaskPrice(quantityRs, option.image);
+  return {
+    taskNo,
+    title: option.title,
+    image: option.image,
+    quantityRs,
+    commissionRs: Number((baseCommission * 5).toFixed(2)),
+    rewards: 1,
+    isPrime: true,
+  };
 }
 
 function accountStatusFromRow(row) {
@@ -74,7 +114,11 @@ function mapProfile(row) {
 function parseImageState(raw) {
   if (!raw) return null;
   if (typeof raw === "object" && raw.sequence && Array.isArray(raw.sequence)) {
-    return { index: raw.index ?? 0, sequence: raw.sequence };
+    const validPaths = new Set(TASK_IMAGE_POOL);
+    const versionOk = Number(raw.version) === IMAGE_CYCLE_VERSION;
+    const pathsOk = raw.sequence.every((p) => typeof p === "string" && validPaths.has(p));
+    if (!versionOk || !pathsOk) return null;
+    return { index: raw.index ?? 0, sequence: raw.sequence, version: IMAGE_CYCLE_VERSION };
   }
   return null;
 }
@@ -164,7 +208,7 @@ function computeCurrentTaskNoFromRow(row, openRow) {
   let currentTaskNo = 0;
   if (openRow) {
     currentTaskNo = Number(openRow.task_no) || 0;
-  } else if (required && hasReceivedFirstTasks && firstCompleted < TASK_DAILY_LIMIT) {
+  } else if (required && hasReceivedFirstTasks && used <= 0 && firstCompleted < TASK_DAILY_LIMIT) {
     currentTaskNo = firstCompleted + 1;
   } else if (!required && used < total) {
     currentTaskNo = used + 1;
@@ -556,6 +600,13 @@ export const User = {
       task_assignment_granted_at: u.task_assignment_granted_at || null,
       prime_orders: normalizePrimeOrders(u.prime_orders),
       prime_order_slots: primeSlotsFromOrders(u.prime_orders),
+      withdrawal_status: u.withdrawal_status || "none",
+      withdrawal_amount: u.withdrawal_amount != null ? Number(u.withdrawal_amount) : null,
+      withdrawal_bank_name: u.withdrawal_bank_name || null,
+      withdrawal_account_number: u.withdrawal_account_number || null,
+      withdrawal_requested_at: u.withdrawal_requested_at || null,
+      withdrawal_decided_at: u.withdrawal_decided_at || null,
+      withdrawal_admin_note: u.withdrawal_admin_note || null,
       created_at: u.created_at,
       updated_at: u.updated_at || u.created_at,
     }));
@@ -590,6 +641,185 @@ export const User = {
       creditScore,
       deltaAmount: creditScore - 100,
     };
+  },
+
+  async getWalletCard(userId) {
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .select(
+        "wallet_mobile_phone, wallet_account_holder_name, wallet_account_number, wallet_bank_name, wallet_branch, wallet_routing_number, wallet_card_updated_at"
+      )
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      mobilePhone: data.wallet_mobile_phone || "",
+      accountHolderName: data.wallet_account_holder_name || "",
+      accountNumber: data.wallet_account_number || "",
+      bankName: data.wallet_bank_name || "",
+      branch: data.wallet_branch || "",
+      routingNumber: data.wallet_routing_number || "",
+      updatedAt: data.wallet_card_updated_at || null,
+      hasCard: Boolean(
+        data.wallet_account_number ||
+          data.wallet_account_holder_name ||
+          data.wallet_bank_name ||
+          data.wallet_mobile_phone ||
+          data.wallet_branch ||
+          data.wallet_routing_number
+      ),
+    };
+  },
+
+  async upsertWalletCard(userId, payload) {
+    const patch = {
+      wallet_mobile_phone: String(payload.mobilePhone || "").trim(),
+      wallet_account_holder_name: String(payload.accountHolderName || "").trim(),
+      wallet_account_number: String(payload.accountNumber || "").trim(),
+      wallet_bank_name: String(payload.bankName || "").trim(),
+      wallet_branch: String(payload.branch || "").trim(),
+      wallet_routing_number: String(payload.routingNumber || "").trim(),
+      wallet_card_updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabaseAdmin.from("users").update(patch).eq("id", userId);
+    if (error) throw error;
+    return this.getWalletCard(userId);
+  },
+
+  async unlinkWalletCard(userId, withdrawalPassword) {
+    const password = String(withdrawalPassword || "").trim();
+    if (!password) return { ok: false, code: "PASSWORD_REQUIRED" };
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    const { data: signInData, error: signErr } = await supabaseAuth.auth.signInWithPassword({
+      email: row.email,
+      password,
+    });
+    if (signErr || !signInData?.user) return { ok: false, code: "INVALID_PASSWORD" };
+
+    const { error } = await supabaseAdmin
+      .from("users")
+      .update({
+        wallet_mobile_phone: "",
+        wallet_account_holder_name: "",
+        wallet_account_number: "",
+        wallet_bank_name: "",
+        wallet_branch: "",
+        wallet_routing_number: "",
+        wallet_card_updated_at: new Date().toISOString(),
+      })
+      .eq("id", userId);
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  async getWithdrawalState(userId) {
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .select(
+        "balance, withdrawal_status, withdrawal_amount, withdrawal_bank_name, withdrawal_account_number, withdrawal_requested_at, withdrawal_decided_at, withdrawal_admin_note"
+      )
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      balance: Number(data.balance ?? 0),
+      status: data.withdrawal_status || "none",
+      amount: data.withdrawal_amount != null ? Number(data.withdrawal_amount) : null,
+      bankName: data.withdrawal_bank_name || "",
+      accountNumber: data.withdrawal_account_number || "",
+      requestedAt: data.withdrawal_requested_at || null,
+      decidedAt: data.withdrawal_decided_at || null,
+      adminNote: data.withdrawal_admin_note || "",
+    };
+  },
+
+  async createWithdrawalRequest(userId, { bankName, accountNumber, amount, withdrawalPassword }) {
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    const password = String(withdrawalPassword || "").trim();
+    if (!password) return { ok: false, code: "PASSWORD_REQUIRED" };
+    const { data: signInData, error: signErr } = await supabaseAuth.auth.signInWithPassword({
+      email: row.email,
+      password,
+    });
+    if (signErr || !signInData?.user) return { ok: false, code: "INVALID_PASSWORD" };
+
+    const safeAmount = Number(amount);
+    if (!Number.isFinite(safeAmount) || safeAmount <= 0) return { ok: false, code: "INVALID_AMOUNT" };
+    if (Number(row.balance ?? 0) < safeAmount) return { ok: false, code: "INSUFFICIENT_BALANCE" };
+    if (String(row.withdrawal_status || "none") === "pending") return { ok: false, code: "ALREADY_PENDING" };
+
+    const { error } = await supabaseAdmin
+      .from("users")
+      .update({
+        withdrawal_status: "pending",
+        withdrawal_amount: Number(safeAmount.toFixed(2)),
+        withdrawal_bank_name: String(bankName || "").trim(),
+        withdrawal_account_number: String(accountNumber || "").trim(),
+        withdrawal_requested_at: new Date().toISOString(),
+        withdrawal_decided_at: null,
+        withdrawal_admin_note: "",
+      })
+      .eq("id", userId);
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  async adminApproveWithdrawal(userId) {
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    if (String(row.withdrawal_status || "none") !== "pending") return { ok: false, code: "NO_PENDING" };
+    const amount = Number(row.withdrawal_amount ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, code: "INVALID_AMOUNT" };
+    if (Number(row.balance ?? 0) < amount) return { ok: false, code: "INSUFFICIENT_BALANCE" };
+
+    const { error } = await supabaseAdmin
+      .from("users")
+      .update({
+        balance: Number((Number(row.balance ?? 0) - amount).toFixed(2)),
+        withdrawal_status: "approved",
+        withdrawal_decided_at: new Date().toISOString(),
+        withdrawal_admin_note: "",
+      })
+      .eq("id", userId);
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  async adminRejectWithdrawal(userId, note = "") {
+    const row = await loadUserRow(userId);
+    if (!row) return null;
+    if (String(row.withdrawal_status || "none") !== "pending") return { ok: false, code: "NO_PENDING" };
+    const { error } = await supabaseAdmin
+      .from("users")
+      .update({
+        withdrawal_status: "rejected",
+        withdrawal_decided_at: new Date().toISOString(),
+        withdrawal_admin_note: String(note || "").trim(),
+      })
+      .eq("id", userId);
+    if (error) throw error;
+    return { ok: true };
+  },
+
+  async clearWithdrawalState(userId) {
+    const { error } = await supabaseAdmin
+      .from("users")
+      .update({
+        withdrawal_status: "none",
+        withdrawal_amount: null,
+        withdrawal_bank_name: "",
+        withdrawal_account_number: "",
+        withdrawal_requested_at: null,
+        withdrawal_decided_at: null,
+        withdrawal_admin_note: "",
+      })
+      .eq("id", userId);
+    if (error) throw error;
+    return { ok: true };
   },
 
   async updateCreditScore(userId, creditScore) {
@@ -809,7 +1039,7 @@ export const User = {
     const firstRemaining = Math.max(0, TASK_DAILY_LIMIT - firstCompleted);
     const remaining = Math.max(0, total - used);
     // First-time cycle is only active while assignment is still required (cycle 1 auto-start path).
-    const canUseFirstTasks = required && hasReceivedFirstTasks && firstCompleted < TASK_DAILY_LIMIT;
+    const canUseFirstTasks = required && hasReceivedFirstTasks && used <= 0 && firstCompleted < TASK_DAILY_LIMIT;
     const canUseAssignedTasks = !required && used < total;
     let canPerformTasks = canUseFirstTasks || canUseAssignedTasks;
 
@@ -836,8 +1066,21 @@ export const User = {
       activePrime &&
       Number(activePrime.task_no) === Number(currentTaskNo) &&
       currentTaskNo > 0
-        ? stablePrimeGrabProduct(userId, activePrime.task_no, primeGrabCycleKey(row))
+        ? (() => {
+            const selected = getPrimeProductByKey(activePrime?.product_key);
+            if (selected) return { image: selected.image, title: selected.title };
+            return null;
+          })()
         : null;
+
+    const hiddenGiftTaskNo = resolveHiddenGiftTaskNoFromRow(row);
+    const hiddenGiftKeyRaw = row?.hidden_gift_product_key ? String(row.hidden_gift_product_key).trim() : "";
+    const hiddenGiftProductOpt = hiddenGiftKeyRaw ? getPrimeProductByKey(hiddenGiftKeyRaw) : null;
+    const hiddenGiftProduct =
+      hiddenGiftProductOpt && hiddenGiftKeyRaw
+        ? { image: hiddenGiftProductOpt.image, title: hiddenGiftProductOpt.title }
+        : null;
+    const hiddenGiftShowBoost = Boolean(hiddenGiftKeyRaw && hiddenGiftProduct);
     /**
      * Do NOT set canPerformTasks false only because prime recharge is short — the Report UI must allow
      * "Enter" to show the prime modal; completion stays blocked in markTaskCompleted / openTask.
@@ -869,6 +1112,10 @@ export const User = {
       primeNegativeAmount,
       primeShowNegative,
       primeGrabProduct,
+      hiddenGiftTaskNo,
+      hiddenGiftProductKey: hiddenGiftKeyRaw || null,
+      hiddenGiftProduct,
+      hiddenGiftShowBoost,
       signInRewardAmount,
       hasReceivedFirstTasks,
       firstTasksCompleted: firstCompleted,
@@ -954,15 +1201,15 @@ export const User = {
       }
     } else {
       if (completesAssignedCycle) {
-        // User finished the full 30-task assigned cycle — auto-start next cycle (no admin action needed).
+        // User finished the full 30-task assigned/prime-mixed cycle — lock until admin assigns again.
         userPatch.task_quota_total = TASK_DAILY_LIMIT;
-        userPatch.task_quota_used = 0;
-        userPatch.task_assignment_required = false;
-        userPatch.task_assignment_requested_at = null;
-        userPatch.task_assignment_granted_at = new Date().toISOString();
+        userPatch.task_quota_used = total;
+        userPatch.task_assignment_required = true;
+        userPatch.task_assignment_requested_at = row.task_assignment_requested_at || new Date().toISOString();
         userPatch.prime_orders = [];
         userPatch.admin_deposit_profit_basis = 0;
-        userPatch.image_cycle_state = buildImageCycles();
+        userPatch.hidden_gift_task_no = null;
+        userPatch.hidden_gift_product_key = null;
       } else {
         userPatch.task_quota_used = used + 1;
       }
@@ -985,7 +1232,11 @@ export const User = {
       userPatch.prime_orders = nextPrime;
     }
 
-    const { error: upErr } = await supabaseAdmin.from("users").update(userPatch).eq("id", userId);
+    let { error: upErr } = await supabaseAdmin.from("users").update(userPatch).eq("id", userId);
+    if (upErr && isMissingUsersColumnError(upErr, "hidden_gift_task_no")) {
+      const { hidden_gift_task_no, hidden_gift_product_key, ...rest } = userPatch;
+      upErr = (await supabaseAdmin.from("users").update(rest).eq("id", userId)).error;
+    }
     if (upErr) throw upErr;
 
     const completedTaskNo = Number(targetPending.task_no || 0);
@@ -1012,10 +1263,9 @@ export const User = {
     }
 
     if (completesAssignedCycle) {
-      // Reset per-cycle profit tracker (keep last_task_no/amount for history) and open task #1 for the next cycle.
+      // Reset cycle tracker and lock task entry until admin assigns a fresh cycle.
       await upsertReportProgress(userId, { cycle_instant_profit: 0 });
-      await insertActivityLog(userId, "Task cycle completed. New tasks are available.");
-      await this._insertOpenTask(userId, 1, false, []);
+      await insertActivityLog(userId, "30-task cycle completed. Enter access is locked until admin assigns new tasks.");
     }
 
     if (commission > 0) {
@@ -1050,6 +1300,8 @@ export const User = {
       commission_multiplier: 1,
       commission_tier: 0,
       image_cycle_state: buildImageCycles(),
+      hidden_gift_task_no: null,
+      hidden_gift_product_key: null,
     };
     let { error } = await supabaseAdmin
       .from("users")
@@ -1058,6 +1310,15 @@ export const User = {
       .eq("role", "user");
     if (error && isMissingUsersColumnError(error, "commission_multiplier")) {
       const { commission_multiplier, ...fallbackPatch } = assignPatch;
+      assignPatch = fallbackPatch;
+      ({ error } = await supabaseAdmin
+        .from("users")
+        .update(assignPatch)
+        .eq("id", userId)
+        .eq("role", "user"));
+    }
+    if (error && isMissingUsersColumnError(error, "hidden_gift_task_no")) {
+      const { hidden_gift_task_no, hidden_gift_product_key, ...fallbackPatch } = assignPatch;
       assignPatch = fallbackPatch;
       ({ error } = await supabaseAdmin
         .from("users")
@@ -1097,10 +1358,15 @@ export const User = {
     let task;
     let nextState = imageState;
     if (isPrimeTask) {
-      const { image, title } = stablePrimeGrabProduct(userId, taskNo, primeGrabCycleKey(row));
-      task = makeActivityTask(taskNo, true, image, capital, totalCapitalTier);
-      task.title = title;
-      task.image = image;
+      const selectedProduct = getPrimeProductByKey(activePrime?.product_key);
+      if (selectedProduct) {
+        task = buildPrimeTaskFromProductOption(taskNo, selectedProduct, capital);
+      } else {
+        const fallback = randomNonPrimeProductForPrimeTask();
+        task = makeActivityTask(taskNo, true, fallback.image, capital, totalCapitalTier);
+        task.title = fallback.title;
+        task.image = fallback.image;
+      }
     } else {
       const out = makeUserTaskFromState(taskNo, false, imageState, capital, totalCapitalTier);
       task = out.task;
@@ -1201,13 +1467,36 @@ export const User = {
     return { userId, slots: cleaned, primeOrders };
   },
 
-  async adminAssignTasksWithPrime(userId, primeOrdersInput = []) {
+  async adminAssignTasksWithPrime(userId, primeOrdersInput = [], hiddenGiftInput = null) {
     const row = await loadUserRow(userId);
     if (!row || row.role !== "user") return null;
 
     await supabaseAdmin.from("user_tasks").delete().eq("user_id", userId).eq("status", "open");
 
     const prime_orders = normalizePrimeOrdersFromAssign(primeOrdersInput);
+
+    let hiddenGiftPatch = { hidden_gift_task_no: null, hidden_gift_product_key: null };
+    if (hiddenGiftInput != null && typeof hiddenGiftInput === "object") {
+      if (Object.prototype.hasOwnProperty.call(hiddenGiftInput, "task_no")) {
+        const v = hiddenGiftInput.task_no;
+        if (v === null || v === "") {
+          hiddenGiftPatch.hidden_gift_task_no = null;
+        } else {
+          const tn = Math.floor(Number(v));
+          if (Number.isFinite(tn) && tn >= 0 && tn <= TASK_DAILY_LIMIT) {
+            hiddenGiftPatch.hidden_gift_task_no = tn;
+          }
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(hiddenGiftInput, "product_key")) {
+        const pk = hiddenGiftInput.product_key;
+        if (pk == null || String(pk).trim() === "") {
+          hiddenGiftPatch.hidden_gift_product_key = null;
+        } else {
+          hiddenGiftPatch.hidden_gift_product_key = String(pk).trim();
+        }
+      }
+    }
 
     let assignPatch = {
       has_received_first_tasks: true,
@@ -1221,6 +1510,7 @@ export const User = {
       commission_multiplier: 1,
       commission_tier: 0,
       image_cycle_state: buildImageCycles(),
+      ...hiddenGiftPatch,
     };
     let { error } = await supabaseAdmin
       .from("users")
@@ -1229,6 +1519,15 @@ export const User = {
       .eq("role", "user");
     if (error && isMissingUsersColumnError(error, "commission_multiplier")) {
       const { commission_multiplier, ...fallbackPatch } = assignPatch;
+      assignPatch = fallbackPatch;
+      ({ error } = await supabaseAdmin
+        .from("users")
+        .update(assignPatch)
+        .eq("id", userId)
+        .eq("role", "user"));
+    }
+    if (error && isMissingUsersColumnError(error, "hidden_gift_task_no")) {
+      const { hidden_gift_task_no, hidden_gift_product_key, ...fallbackPatch } = assignPatch;
       assignPatch = fallbackPatch;
       ({ error } = await supabaseAdmin
         .from("users")

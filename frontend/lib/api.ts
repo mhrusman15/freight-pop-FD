@@ -384,6 +384,13 @@ export type AdminUserRow = {
   prime_order_slots?: number[];
   /** Per-task prime rules (server-driven). */
   prime_orders?: { task_no: number; negative_amount: number; is_completed: boolean }[];
+  withdrawal_status?: "none" | "pending" | "approved" | "rejected";
+  withdrawal_amount?: number | null;
+  withdrawal_bank_name?: string | null;
+  withdrawal_account_number?: string | null;
+  withdrawal_requested_at?: string | null;
+  withdrawal_decided_at?: string | null;
+  withdrawal_admin_note?: string | null;
 };
 
 export type AdminAdminRow = {
@@ -473,6 +480,17 @@ export const adminApi = {
       body: JSON.stringify({ creditScore }),
     });
   },
+  approveUserWithdrawal(id: string) {
+    return api<{ message: string }>(`/api/admin/users/${id}/withdrawal/approve`, {
+      method: "PATCH",
+    });
+  },
+  rejectUserWithdrawal(id: string, note?: string) {
+    return api<{ message: string }>(`/api/admin/users/${id}/withdrawal/reject`, {
+      method: "PATCH",
+      body: JSON.stringify({ note: note || "" }),
+    });
+  },
   deleteUser(id: string) {
     return api<{ message: string; user: { id: string; full_name: string; email: string } }>(`/api/admin/users/${id}`, {
       method: "DELETE",
@@ -486,11 +504,15 @@ export const adminApi = {
   /** Assign 30-task cycle with per-task prime recharge amounts (replaces assign + prime configure). */
   assignTasksWithPrime(
     id: string,
-    primeOrders: { task_no: number; negative_amount: number }[],
+    primeOrders: { task_no: number; negative_amount: number; product_key?: string }[],
+    hiddenGift?: { task_no: number | null; product_key: string | null } | null,
   ) {
     return api<{ message: string; status: UserTaskStatus }>(`/api/admin/users/${id}/tasks/assign-with-prime`, {
       method: "PATCH",
-      body: JSON.stringify({ primeOrders }),
+      body: JSON.stringify({
+        primeOrders,
+        ...(hiddenGift != null ? { hiddenGift } : {}),
+      }),
     });
   },
   assignPrimeOrders(id: string, slots: number[], opts?: { noNegative?: boolean; negativeAmount?: number }) {
@@ -527,6 +549,12 @@ export type UserTaskStatus = {
   primeNegativeAmount?: number;
   /** Deterministic Grab Order product while this prime task is active (matches open task when created). */
   primeGrabProduct?: { image: string; title: string } | null;
+  /** 0 = hidden gift disabled; otherwise trigger after this many tasks completed in cycle (default 28). */
+  hiddenGiftTaskNo?: number;
+  hiddenGiftProductKey?: string | null;
+  hiddenGiftProduct?: { image: string; title: string } | null;
+  /** True when admin picked a prime-catalog product for the hidden gift (show 15x boost). */
+  hiddenGiftShowBoost?: boolean;
   /** When true, prime order UI may show order quantity / reserve impact as negative (admin set a recharge amount). */
   primeShowNegative?: boolean;
   /** True after admin saves a positive "Amount to add (runtime)" for this user. */
@@ -571,6 +599,28 @@ export type UserTaskActivityEntry = {
   activityType?: "task" | "log";
   taskImage?: string | null;
   taskTitle?: string | null;
+};
+
+export type UserWalletCard = {
+  mobilePhone: string;
+  accountHolderName: string;
+  accountNumber: string;
+  bankName: string;
+  branch: string;
+  routingNumber: string;
+  updatedAt: string | null;
+  hasCard: boolean;
+};
+
+export type UserWithdrawalState = {
+  balance: number;
+  status: "none" | "pending" | "approved" | "rejected";
+  amount: number | null;
+  bankName: string;
+  accountNumber: string;
+  requestedAt: string | null;
+  decidedAt: string | null;
+  adminNote: string;
 };
 
 export type UserOpenTaskResult = {
@@ -646,6 +696,51 @@ export const userApi = {
     return api<{ ok: boolean }>("/api/user/activity-log", {
       method: "POST",
       body: JSON.stringify(body),
+      suppressAuthRedirect: true,
+    });
+  },
+  getWalletCard() {
+    return api<UserWalletCard>("/api/user/wallet-card", { suppressAuthRedirect: true });
+  },
+  saveWalletCard(body: {
+    mobilePhone: string;
+    accountHolderName: string;
+    accountNumber: string;
+    bankName: string;
+    branch: string;
+    routingNumber: string;
+  }) {
+    return api<{ message: string; card: UserWalletCard }>("/api/user/wallet-card", {
+      method: "POST",
+      body: JSON.stringify(body),
+      suppressAuthRedirect: true,
+    });
+  },
+  unlinkWalletCard(withdrawalPassword: string) {
+    return api<{ message: string }>("/api/user/wallet-card/unlink", {
+      method: "POST",
+      body: JSON.stringify({ withdrawalPassword }),
+      suppressAuthRedirect: true,
+    });
+  },
+  getWithdrawalState() {
+    return api<UserWithdrawalState>("/api/user/withdrawal", { suppressAuthRedirect: true });
+  },
+  requestWithdrawal(body: {
+    bankName: string;
+    accountNumber: string;
+    amount: number;
+    withdrawalPassword: string;
+  }) {
+    return api<{ message: string }>("/api/user/withdrawal", {
+      method: "POST",
+      body: JSON.stringify(body),
+      suppressAuthRedirect: true,
+    });
+  },
+  acknowledgeWithdrawal() {
+    return api<{ ok: boolean }>("/api/user/withdrawal/ack", {
+      method: "POST",
       suppressAuthRedirect: true,
     });
   },

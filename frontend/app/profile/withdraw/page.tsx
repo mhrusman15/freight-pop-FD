@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAssetBalance } from "@/lib/use-asset-balance";
-import { getAssetBalance, subtractFromAssetBalance } from "@/lib/asset-balance-store";
 import { getUserData, getUserToken } from "@/lib/auth-store";
+import { userApi } from "@/lib/api";
 
 const WITHDRAW_METHODS = ["BANK"] as const;
 
@@ -13,8 +13,10 @@ export default function ProfileWithdrawPage() {
   const { balance: assetBalance, formatted: assetBalanceFormatted, refetch: refetchBalance } = useAssetBalance();
   const [mounted, setMounted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [loadingWalletCard, setLoadingWalletCard] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
-  const [method, setMethod] = useState<string>("");
+  const [method, setMethod] = useState<string>("BANK");
+  const [hasLinkedBank, setHasLinkedBank] = useState(false);
   const [formData, setFormData] = useState({
     bankName: "",
     accountNumber: "",
@@ -22,6 +24,16 @@ export default function ProfileWithdrawPage() {
     withdrawalPassword: "",
   });
   const [submitError, setSubmitError] = useState("");
+  const [popup, setPopup] = useState({
+    open: false,
+    title: "",
+    message: "",
+    acknowledge: false,
+  });
+
+  const openPopup = (title: string, message: string, acknowledge = false) => {
+    setPopup({ open: true, title, message, acknowledge });
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -33,6 +45,36 @@ export default function ProfileWithdrawPage() {
       return;
     }
     setMounted(true);
+
+    async function loadInitial() {
+      setLoadingWalletCard(true);
+      const [cardRes, wdRes] = await Promise.all([userApi.getWalletCard(), userApi.getWithdrawalState()]);
+
+      if (cardRes.data) {
+        const has = Boolean(cardRes.data.bankName && cardRes.data.accountNumber);
+        setHasLinkedBank(has);
+        setFormData((prev) => ({
+          ...prev,
+          bankName: cardRes.data.bankName || "",
+          accountNumber: cardRes.data.accountNumber || "",
+        }));
+        setMethod(has ? "BANK" : "");
+      } else {
+        setHasLinkedBank(false);
+        setMethod("");
+      }
+
+      if (wdRes.data?.status === "approved") {
+        openPopup("Reminder", "Your withdraw approved. Congratulations.", true);
+      } else if (wdRes.data?.status === "rejected") {
+        openPopup("Reminder", "Some information is wrong. Contact support.", true);
+      }
+
+      setLoadingWalletCard(false);
+      refetchBalance();
+    }
+
+    loadInitial();
   }, [router]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -47,20 +89,40 @@ export default function ProfileWithdrawPage() {
       setSubmitError("Enter a valid amount.");
       return;
     }
-    const token = getUserToken();
-    const current = token ? assetBalance : getAssetBalance();
-    if (amount > current) {
-      setSubmitError("Insufficient balance.");
+    if (amount > assetBalance) {
+      openPopup("Reminder", "Insufficient balance for withdraw");
+      setSubmitError("Insufficient balance for withdraw");
+      return;
+    }
+    if (!method) {
+      setSubmitError("Select withdraw method.");
+      return;
+    }
+    if (!formData.bankName.trim() || !formData.accountNumber.trim()) {
+      setSubmitError("Add linked bank information first from Wallet page.");
+      return;
+    }
+    if (!formData.withdrawalPassword.trim()) {
+      setSubmitError("Withdrawal password is required.");
       return;
     }
     setSubmitting(true);
-    subtractFromAssetBalance(amount);
-    if (token) {
-      refetchBalance();
-    }
+    const res = await userApi.requestWithdrawal({
+      bankName: formData.bankName,
+      accountNumber: formData.accountNumber,
+      amount,
+      withdrawalPassword: formData.withdrawalPassword,
+    });
     setSubmitting(false);
+    if (res.error) {
+      if (res.error.toLowerCase().includes("insufficient")) {
+        openPopup("Reminder", "Insufficient balance for withdraw");
+      }
+      setSubmitError(res.error);
+      return;
+    }
+    openPopup("Reminder", "Your withdraw pending. Wait for approval.");
     setFormData((prev) => ({ ...prev, cashOutAmount: "", withdrawalPassword: "" }));
-    router.push("/profile");
   };
 
   if (!mounted) {
@@ -146,14 +208,16 @@ export default function ProfileWithdrawPage() {
                   id="withdrawMethod"
                   value={method}
                   onChange={(e) => setMethod(e.target.value)}
+                  disabled={!hasLinkedBank || loadingWalletCard}
                   className="w-full appearance-none rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-4 py-3 pr-10 text-slate-900 dark:text-slate-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="">Select method</option>
-                  {WITHDRAW_METHODS.map((m) => (
+                  {hasLinkedBank &&
+                    WITHDRAW_METHODS.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
-                  ))}
+                    ))}
                 </select>
                 <svg
                   className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400"
@@ -181,6 +245,7 @@ export default function ProfileWithdrawPage() {
                     type="text"
                     value={formData.bankName}
                     onChange={handleChange}
+                    readOnly
                     className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-4 py-3 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
@@ -198,10 +263,16 @@ export default function ProfileWithdrawPage() {
                     inputMode="numeric"
                     value={formData.accountNumber}
                     onChange={handleChange}
+                    readOnly
                     className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-4 py-3 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 min-h-[2.75rem]"
                   />
                 </div>
               </>
+            )}
+            {!hasLinkedBank && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                No linked bank card found. Please add card information in Wallet first.
+              </p>
             )}
 
             {/* Cash out amount */}
@@ -221,6 +292,7 @@ export default function ProfileWithdrawPage() {
                   name="cashOutAmount"
                   type="text"
                   inputMode="decimal"
+                  autoComplete="off"
                   value={formData.cashOutAmount}
                   onChange={handleChange}
                   placeholder=""
@@ -242,6 +314,8 @@ export default function ProfileWithdrawPage() {
                   id="withdrawalPassword"
                   name="withdrawalPassword"
                   type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  spellCheck={false}
                   value={formData.withdrawalPassword}
                   onChange={handleChange}
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-4 py-3 pr-12 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -294,6 +368,37 @@ export default function ProfileWithdrawPage() {
           </form>
         </div>
       </div>
+      {popup.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="relative w-full max-w-sm rounded-[24px] bg-white px-6 pb-6 pt-10 text-center shadow-2xl dark:bg-slate-900">
+            <div className="absolute -top-10 left-1/2 flex h-20 w-20 -translate-x-1/2 items-center justify-center rounded-full bg-[#334155] text-white shadow-lg">
+              <img src="/icons/bell.png" alt="Notification bell" className="h-10 w-10 object-contain" />
+              <span className="absolute -right-1 top-0 inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-full bg-pink-500 px-1 text-xs font-bold text-white">
+                1
+              </span>
+            </div>
+
+            <h3 className="text-5xl font-extrabold leading-none text-slate-900 dark:text-white">{popup.title}</h3>
+            <p className="mt-4 text-lg text-slate-600 dark:text-slate-300">{popup.message}</p>
+
+            <div className="mt-7 flex justify-center pb-1">
+              <button
+                type="button"
+                onClick={async () => {
+                  if (popup.acknowledge) {
+                    await userApi.acknowledgeWithdrawal();
+                    refetchBalance();
+                  }
+                  setPopup({ open: false, title: "", message: "", acknowledge: false });
+                }}
+                className="min-w-[200px] rounded-full bg-blue-600 px-8 py-3 text-lg font-semibold text-white shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

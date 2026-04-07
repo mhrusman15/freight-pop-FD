@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   TOTAL_TASKS,
-  createRandomHiddenRewardGift,
+  createRandomNonPrimeHiddenGift,
   createRandomTask,
   getRandomPrimeTaskImage,
   getNextTaskImage,
@@ -20,8 +20,6 @@ import {
   type UserTaskStatus,
 } from "@/lib/api";
 import { getUserData } from "@/lib/auth-store";
-
-const HIDDEN_REWARD_TRIGGER_TASK_NO = 28;
 
 type ActivityStatus = "pending" | "completed";
 type ActivityEntry = {
@@ -581,6 +579,14 @@ export function ReportClient() {
     const diff = Date.now() - new Date(depositAt).getTime();
     return diff < 24 * 60 * 60 * 1000;
   }, [walletSnapshot.lastPositiveDepositAt]);
+
+  /** After completing this many tasks in the cycle, show hidden gift (server; 0 = disabled, default 28). */
+  const hiddenGiftTriggerTaskNo = useMemo(() => {
+    const n = Number(taskStatus?.hiddenGiftTaskNo ?? 28);
+    if (n === 0) return -1;
+    if (!Number.isFinite(n) || n < 1) return 28;
+    return n;
+  }, [taskStatus?.hiddenGiftTaskNo]);
   const currentTitle = getTitleFromImageName(activeTask.image);
   const isAdminAssignedCyclePending =
     Boolean(taskStatus?.taskAssignmentGrantedAt) &&
@@ -619,6 +625,13 @@ export function ReportClient() {
           const completed = inFirstTimeBonus
             ? Math.max(lastTaskNo, firstDone)
             : Math.max(lastTaskNo, quotaUsed);
+          const rawHg = res.data.hiddenGiftTaskNo;
+          let hgTrigger = 28;
+          if (rawHg === 0) hgTrigger = -1;
+          else if (rawHg != null && Number.isFinite(Number(rawHg))) {
+            const x = Math.floor(Number(rawHg));
+            hgTrigger = x >= 1 && x <= total ? x : 28;
+          }
           if (noTasksUntilAdmin) {
             setCurrentTaskIndex(total - 1);
             setCompletedInCycle(total);
@@ -629,12 +642,12 @@ export function ReportClient() {
               const idx = Math.min(total - 1, serverTaskIndex);
               setCurrentTaskIndex(idx);
               setCompletedInCycle(Math.max(0, idx));
-              setHasShownHiddenRewardThisCycle(idx >= HIDDEN_REWARD_TRIGGER_TASK_NO);
+              setHasShownHiddenRewardThisCycle(hgTrigger <= 0 ? true : idx >= hgTrigger);
             } else {
               const mod = completed % total;
               setCurrentTaskIndex(mod);
               setCompletedInCycle(mod);
-              setHasShownHiddenRewardThisCycle(mod >= HIDDEN_REWARD_TRIGGER_TASK_NO);
+              setHasShownHiddenRewardThisCycle(hgTrigger <= 0 ? true : mod >= hgTrigger);
             }
           }
           setInstantProfit(Number.isFinite(cycleProfit) ? cycleProfit : 0);
@@ -1087,7 +1100,11 @@ export function ReportClient() {
       });
       setCompletedInCycle((prev) => {
         const next = prev + 1;
-        if (next === HIDDEN_REWARD_TRIGGER_TASK_NO && !hasShownHiddenRewardThisCycle) {
+        if (
+          hiddenGiftTriggerTaskNo > 0 &&
+          next === hiddenGiftTriggerTaskNo &&
+          !hasShownHiddenRewardThisCycle
+        ) {
           setSelectedGiftBox(null);
           setGiftRewardTask(null);
           setIsRewardModalOpen(true);
@@ -1121,7 +1138,19 @@ export function ReportClient() {
       return;
     }
     if (selectedGiftBox !== null) return;
-    const reward = createRandomHiddenRewardGift(Math.floor(Math.random() * total) + 1);
+    const fixed = taskStatus?.hiddenGiftProduct;
+    const reward =
+      fixed?.image && fixed.title
+        ? {
+            id: boxIndex,
+            category: "bag" as const,
+            image: fixed.image,
+            title: fixed.title,
+            price: 0,
+            commission: 0,
+            rewards: 1,
+          }
+        : createRandomNonPrimeHiddenGift(boxIndex);
     setSelectedGiftBox(boxIndex);
     setGiftRewardTask(reward);
     if (completedInCycle >= total) {
@@ -1599,9 +1628,9 @@ export function ReportClient() {
                   <p className="text-sm font-semibold text-slate-900 truncate">
                     {giftRewardTask.title}
                   </p>
-                  <p className="text-xs text-slate-600">
-                    15x Boost on this gift
-                  </p>
+                  {taskStatus?.hiddenGiftShowBoost ? (
+                    <p className="text-xs text-slate-600">15x Boost on this gift</p>
+                  ) : null}
                 </div>
               </div>
               <button

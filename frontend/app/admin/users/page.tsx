@@ -6,6 +6,22 @@ import { canAdmin, getAdminPermission, isSuperAdmin } from "@/lib/auth-store";
 
 const PAGE_SIZE = 10;
 const TASK_ASSIGN_LIMIT = 30;
+const RANDOM_NON_PRIME_KEY = "__random_non_prime__";
+const PRIME_PRODUCT_OPTIONS = [
+  { key: "prime-shoes-combo", label: "Prime Shoes Combo (250,000 - 400,000)" },
+  { key: "prime-samsung-led", label: "Prime Samsung LED (200,000 - 350,000)" },
+  { key: "prime-watch-gold", label: "Prime Watch Gold (250,000 - 500,000)" },
+  { key: "prime-yamaha-piano", label: "Prime Yamaha Piano (200,000 - 300,000)" },
+  { key: "prime-piano", label: "Prime Piano (200,000 - 350,000)" },
+  { key: "prime-iphone-17-pro", label: "Prime iPhone 17 Pro (250,000 - 280,000)" },
+  { key: "prime-iphone-17-pro-max", label: "Prime iPhone 17 Pro Max (300,000 - 350,000)" },
+  { key: "prime-luxury-watch-box", label: "Prime Luxury Watch Box (80,000 - 90,000)" },
+  { key: "prime-ferrari-car-model-diecast", label: "Prime Ferrari Car Model (Diecast) (500,000 - 700,000)" },
+  { key: "prime-designer-sofa-set", label: "Prime Designer Sofa Set (1,200,000 - 1,500,000)" },
+  { key: "prime-home-theater-system", label: "Prime Home Theater System (800,000 - 1,200,000)" },
+  { key: "prime-diamond-necklace", label: "Prime Diamond Necklace (1,000,000 - 3,000,000)" },
+  { key: "prime-sports-bike-yamaha-ninja", label: "Prime Sports Bike (Yamaha/Ninja) (2,000,000 - 3,500,000)" },
+];
 
 function formatRsSignedAmount(n: number): string {
   if (!Number.isFinite(n)) return "Rs 0.00";
@@ -106,6 +122,10 @@ export default function AdminUsersPage() {
   const [cycleStep, setCycleStep] = useState<1 | 2 | 3>(1);
   const [selectedPrimeTasks, setSelectedPrimeTasks] = useState<number[]>([]);
   const [primeAmounts, setPrimeAmounts] = useState<Record<number, string>>({});
+  const [primeProducts, setPrimeProducts] = useState<Record<number, string>>({});
+  /** default = DB null (legacy task 28); off = 0; else "1"–"30" */
+  const [hiddenGiftTaskSelect, setHiddenGiftTaskSelect] = useState<string>("default");
+  const [hiddenGiftProduct, setHiddenGiftProduct] = useState<string>(RANDOM_NON_PRIME_KEY);
 
   const [balancePos, setBalancePos] = useState<Record<string, string>>({});
   const [balanceNeg, setBalanceNeg] = useState<Record<string, string>>({});
@@ -155,6 +175,9 @@ export default function AdminUsersPage() {
   const openAssignCycleModal = (user: AdminUserRow) => {
     setSelectedPrimeTasks([]);
     setPrimeAmounts({});
+    setPrimeProducts({});
+    setHiddenGiftTaskSelect("default");
+    setHiddenGiftProduct(RANDOM_NON_PRIME_KEY);
     setCycleStep(1);
     setCycleModalUser(user);
   };
@@ -163,6 +186,11 @@ export default function AdminUsersPage() {
     setSelectedPrimeTasks((prev) => {
       if (prev.includes(n)) {
         setPrimeAmounts((p) => {
+          const next = { ...p };
+          delete next[n];
+          return next;
+        });
+        setPrimeProducts((p) => {
           const next = { ...p };
           delete next[n];
           return next;
@@ -176,7 +204,7 @@ export default function AdminUsersPage() {
   const submitAssignCycleWithPrime = async () => {
     if (!cycleModalUser) return;
     const sorted = [...selectedPrimeTasks].sort((a, b) => a - b);
-    const orders: { task_no: number; negative_amount: number }[] = [];
+    const orders: { task_no: number; negative_amount: number; product_key?: string }[] = [];
     for (const t of sorted) {
       const raw = (primeAmounts[t] ?? "").trim();
       const n = raw === "" ? NaN : Number(raw);
@@ -185,11 +213,19 @@ export default function AdminUsersPage() {
         showToast("error", `Enter amount for task #${t}`);
         return;
       }
-      orders.push({ task_no: t, negative_amount: n });
+      const selectedProduct = (primeProducts[t] || "").trim();
+      const productKey = selectedProduct && selectedProduct !== RANDOM_NON_PRIME_KEY ? selectedProduct : undefined;
+      orders.push({ task_no: t, negative_amount: n, ...(productKey ? { product_key: productKey } : {}) });
     }
+    const hgTaskNo: number | null =
+      hiddenGiftTaskSelect === "default" ? null : hiddenGiftTaskSelect === "off" ? 0 : Number(hiddenGiftTaskSelect);
+    const hgProductKey =
+      hiddenGiftProduct && hiddenGiftProduct !== RANDOM_NON_PRIME_KEY ? hiddenGiftProduct : null;
+    const hiddenGift = { task_no: hgTaskNo, product_key: hgProductKey };
+
     setAssigningId(cycleModalUser.id);
     setError("");
-    const res = await adminApi.assignTasksWithPrime(cycleModalUser.id, orders);
+    const res = await adminApi.assignTasksWithPrime(cycleModalUser.id, orders, hiddenGift);
     setAssigningId(null);
     if (res.error) {
       setError(res.error);
@@ -482,28 +518,92 @@ export default function AdminUsersPage() {
             ) : (
               <div className="mt-3 space-y-2">
                 {[...selectedPrimeTasks].sort((a, b) => a - b).map((t) => (
-                  <div key={t} className="flex items-center gap-2">
-                    <span className="w-20 shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">
-                      Task {t}
-                    </span>
-                    <input
-                      type="number"
-                      min={1}
-                      step="0.01"
-                      placeholder="Rs"
-                      value={primeAmounts[t] ?? ""}
-                      onChange={(e) =>
-                        setPrimeAmounts((p) => ({
-                          ...p,
-                          [t]: e.target.value,
-                        }))
-                      }
-                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-                    />
+                  <div key={t} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800/50">
+                    <div className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">
+                        Task {t}
+                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        step="0.01"
+                        placeholder="Recharge Rs"
+                        value={primeAmounts[t] ?? ""}
+                        onChange={(e) =>
+                          setPrimeAmounts((p) => ({
+                            ...p,
+                            [t]: e.target.value,
+                          }))
+                        }
+                        className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">
+                        Product
+                      </span>
+                      <select
+                        value={primeProducts[t] ?? RANDOM_NON_PRIME_KEY}
+                        onChange={(e) =>
+                          setPrimeProducts((p) => ({
+                            ...p,
+                            [t]: e.target.value,
+                          }))
+                        }
+                        className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                      >
+                        <option value={RANDOM_NON_PRIME_KEY}>No selection -&gt; random non-prime product</option>
+                        {PRIME_PRODUCT_OPTIONS.map((opt) => (
+                          <option key={opt.key} value={opt.key}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
+            <div className="mt-4 space-y-2 rounded-lg border border-amber-200 bg-amber-50/80 p-3 dark:border-amber-900/50 dark:bg-amber-950/30">
+              <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">
+                Random hidden reward (6 gift boxes)
+              </p>
+              <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                User picks any one box; the reward is always the product you set. &quot;No selection&quot; uses a random
+                normal product and hides the 15x boost line.
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <span className="shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">Trigger after task</span>
+                <select
+                  value={hiddenGiftTaskSelect}
+                  onChange={(e) => setHiddenGiftTaskSelect(e.target.value)}
+                  className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                >
+                  <option value="default">Default (after completing task 28)</option>
+                  <option value="off">Disabled (no gift modal)</option>
+                  {Array.from({ length: TASK_ASSIGN_LIMIT }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={String(n)}>
+                      After completing task {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <span className="shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">Product</span>
+                <select
+                  value={hiddenGiftProduct}
+                  onChange={(e) => setHiddenGiftProduct(e.target.value)}
+                  className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                >
+                  <option value={RANDOM_NON_PRIME_KEY}>No selection → random normal product</option>
+                  {PRIME_PRODUCT_OPTIONS.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
@@ -551,9 +651,38 @@ export default function AdminUsersPage() {
                           })}
                         </strong>
                       </p>
+                      <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                        Product:{" "}
+                        <strong>
+                          {primeProducts[t] && primeProducts[t] !== RANDOM_NON_PRIME_KEY
+                            ? PRIME_PRODUCT_OPTIONS.find((x) => x.key === primeProducts[t])?.label || primeProducts[t]
+                            : "Random non-prime product"}
+                        </strong>
+                      </p>
                     </div>
                   ))
               )}
+              <div className="rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-xs text-slate-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-slate-200">
+                <p className="font-semibold text-slate-800 dark:text-slate-100">Hidden gift</p>
+                <p className="mt-1">
+                  Trigger:{" "}
+                  <strong>
+                    {hiddenGiftTaskSelect === "default"
+                      ? "After task 28 (default)"
+                      : hiddenGiftTaskSelect === "off"
+                        ? "Disabled"
+                        : `After task ${hiddenGiftTaskSelect}`}
+                  </strong>
+                </p>
+                <p className="mt-1">
+                  Product:{" "}
+                  <strong>
+                    {hiddenGiftProduct && hiddenGiftProduct !== RANDOM_NON_PRIME_KEY
+                      ? PRIME_PRODUCT_OPTIONS.find((x) => x.key === hiddenGiftProduct)?.label || hiddenGiftProduct
+                      : "Random normal product (no 15x boost)"}
+                  </strong>
+                </p>
+              </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -608,6 +737,9 @@ export default function AdminUsersPage() {
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
                       Balance control
+                    </th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
+                      Withdraw
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-semibold uppercase text-slate-600 dark:text-slate-300 sm:px-3">
                       Delete
@@ -689,6 +821,58 @@ export default function AdminUsersPage() {
                           >
                             {creditSavingId === user.id ? "Saving…" : "Apply credit score"}
                           </button>
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 align-top sm:px-3">
+                        <div className="flex max-w-[220px] flex-col gap-1.5">
+                          <div className="text-xs text-slate-700 dark:text-slate-300">
+                            Status: <strong>{user.withdrawal_status || "none"}</strong>
+                          </div>
+                          {user.withdrawal_status === "pending" ? (
+                            <>
+                              <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                                {user.withdrawal_amount != null ? `Rs ${Number(user.withdrawal_amount).toFixed(2)}` : "—"} •{" "}
+                                {user.withdrawal_bank_name || "—"}
+                              </div>
+                              <button
+                                type="button"
+                                disabled={!canBalance}
+                                onClick={async () => {
+                                  const res = await adminApi.approveUserWithdrawal(user.id);
+                                  if (res.error) {
+                                    setError(res.error);
+                                    showToast("error", res.error);
+                                    return;
+                                  }
+                                  showToast("success", "Withdrawal approved");
+                                  load(page);
+                                }}
+                                className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!canBalance}
+                                onClick={async () => {
+                                  const note = window.prompt("Reason (optional):", "") || "";
+                                  const res = await adminApi.rejectUserWithdrawal(user.id, note);
+                                  if (res.error) {
+                                    setError(res.error);
+                                    showToast("error", res.error);
+                                    return;
+                                  }
+                                  showToast("success", "Withdrawal rejected");
+                                  load(page);
+                                }}
+                                className="rounded-md bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                              >
+                                Reject
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400">No pending request</span>
+                          )}
                         </div>
                       </td>
                       <td className="px-2 py-2 align-top sm:px-3">

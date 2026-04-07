@@ -142,6 +142,21 @@ export function createRandomHiddenRewardGift(id: number): Task {
   };
 }
 
+/** Normal (non–prime-catalog) product for hidden gift when admin selects “No selection”. */
+export function createRandomNonPrimeHiddenGift(id: number): Task {
+  const file = allTaskImages[Math.floor(Math.random() * allTaskImages.length)] ?? "Man-Shoes.jpg";
+  const image = `/assets/tasks/${file}`;
+  return {
+    id,
+    category: imageToCategory[file] ?? "bag",
+    image,
+    title: getTitleFromImageName(image),
+    price: 0,
+    commission: 0,
+    rewards: 1,
+  };
+}
+
 export const getRandomCategory = (): Category =>
   categories[Math.floor(Math.random() * categories.length)];
 

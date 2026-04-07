@@ -1,5 +1,8 @@
 const TASK_DAILY_LIMIT = 30;
 
+/** Bump when TASK_IMAGE_POOL or sequencing rules change — invalidates persisted `image_cycle_state`. */
+export const IMAGE_CYCLE_VERSION = 4;
+
 const TASK_CATALOG = [
   { title: "Premium Order", image: "/assets/tasks/Girl-bag.jpg", min: 55000, max: 65000, commissionMin: 1800, commissionMax: 2600 },
   { title: "Vault Collection", image: "/assets/tasks/Man-Watch.jpg", min: 42000, max: 58000, commissionMin: 1200, commissionMax: 1900 },
@@ -41,7 +44,36 @@ const TASK_IMAGE_POOL = [
   "/assets/tasks/water-bottle.jpg",
 ];
 
-const PRIME_TASK_IMAGE_POOL = [
+/** Women’s dresses, luxury perfumes, luxury men’s watches, luxury women’s bags — not in random daily rotation. */
+const LUXURY_EXCLUSIVE_IMAGE_PATHS = [
+  "/assets/tasks/Serenity Silk Gown.jpg",
+  "/assets/tasks/Elysian Evening Dress.jpg",
+  "/assets/tasks/Radiant Luxe Sundress.jpg",
+  "/assets/tasks/Opal Grace Ball Dress.jpg",
+  "/assets/tasks/Celestia Satin Frock.jpg",
+  "/assets/tasks/Eternal Noir Essence.jpg",
+  "/assets/tasks/Velvet Opulence Scent.jpg",
+  "/assets/tasks/Midnight Amber Luxe.jpg",
+  "/assets/tasks/Royal Oud Signature.jpg",
+  "/assets/tasks/Celestial Bloom Elixir.jpg",
+  "/assets/tasks/Regal Chronos Elite.jpg",
+  "/assets/tasks/Titanium Marquis.jpg",
+  "/assets/tasks/Imperium Grandmaster.jpg",
+  "/assets/tasks/Noble Conqueror.jpg",
+  "/assets/tasks/Heritage Sovereign.jpg",
+  "/assets/tasks/Aurora Elegance Tote.jpg",
+  "/assets/tasks/Celeste Leather Clutch.jpg",
+  "/assets/tasks/Opulence Satchel.jpg",
+  "/assets/tasks/Seraphina Handbag.jpg",
+  "/assets/tasks/Luxe Horizon Shoulder Bag.jpg",
+];
+
+const LUXURY_EXCLUSIVE_FILE_SET = new Set(
+  LUXURY_EXCLUSIVE_IMAGE_PATHS.map((p) => String(p).split("/").pop() || ""),
+);
+
+/** Prime-only catalog (never in normal random box). */
+const PRIME_EXCLUSIVE_IMAGE_PATHS = [
   "/assets/tasks/prime-Shoes-combo.jpg",
   "/assets/tasks/prime-Samsung-LED.jpg",
   "/assets/tasks/prime-watch-gold.jpg",
@@ -51,6 +83,113 @@ const PRIME_TASK_IMAGE_POOL = [
   "/assets/tasks/Prime-Piano.jpg",
   "/assets/tasks/Prime-luxury watch box.jpg",
 ];
+
+const PRIME_EXCLUSIVE_FILE_SET = new Set(
+  PRIME_EXCLUSIVE_IMAGE_PATHS.map((p) => String(p).split("/").pop() || ""),
+);
+
+/** Prime grab order + luxury catalog (deterministic prime tasks + high-balance normal). */
+const PRIME_GRAB_IMAGE_POOL = [...PRIME_EXCLUSIVE_IMAGE_PATHS, ...LUXURY_EXCLUSIVE_IMAGE_PATHS];
+
+const PRIME_PRODUCT_FALLBACK_IMAGE = "/assets/tasks/prime-Shoes-combo.jpg";
+export const PRIME_PRODUCT_OPTIONS = [
+  { key: "prime-shoes-combo", title: "Prime Shoes Combo", min: 250000, max: 400000, image: "/assets/tasks/prime-Shoes-combo.jpg" },
+  { key: "prime-samsung-led", title: "Prime Samsung LED", min: 200000, max: 350000, image: "/assets/tasks/prime-Samsung-LED.jpg" },
+  { key: "prime-watch-gold", title: "Prime Watch Gold", min: 250000, max: 500000, image: "/assets/tasks/prime-watch-gold.jpg" },
+  { key: "prime-yamaha-piano", title: "Prime Yamaha Piano", min: 200000, max: 300000, image: "/assets/tasks/Prime-Yamaha-Piano.jpg" },
+  { key: "prime-piano", title: "Prime Piano", min: 200000, max: 350000, image: "/assets/tasks/Prime-Piano.jpg" },
+  { key: "prime-iphone-17-pro", title: "Prime iPhone 17 Pro", min: 250000, max: 280000, image: "/assets/tasks/prime-iphone-17 pro.jpg" },
+  { key: "prime-iphone-17-pro-max", title: "Prime iPhone 17 Pro Max", min: 300000, max: 350000, image: "/assets/tasks/prime-iphone 17 pro max.jpg" },
+  { key: "prime-luxury-watch-box", title: "Prime Luxury Watch Box", min: 80000, max: 90000, image: "/assets/tasks/Prime-luxury watch box.jpg" },
+  { key: "prime-ferrari-car-model-diecast", title: "Prime Ferrari Car Model (Diecast)", min: 500000, max: 700000, image: PRIME_PRODUCT_FALLBACK_IMAGE },
+  { key: "prime-designer-sofa-set", title: "Prime Designer Sofa Set", min: 1200000, max: 1500000, image: PRIME_PRODUCT_FALLBACK_IMAGE },
+  { key: "prime-home-theater-system", title: "Prime Home Theater System", min: 800000, max: 1200000, image: PRIME_PRODUCT_FALLBACK_IMAGE },
+  { key: "prime-diamond-necklace", title: "Prime Diamond Necklace", min: 1000000, max: 3000000, image: PRIME_PRODUCT_FALLBACK_IMAGE },
+  { key: "prime-sports-bike-yamaha-ninja", title: "Prime Sports Bike (Yamaha/Ninja)", min: 2000000, max: 3500000, image: PRIME_PRODUCT_FALLBACK_IMAGE },
+];
+
+const PRIME_PRODUCT_OPTIONS_BY_KEY = new Map(PRIME_PRODUCT_OPTIONS.map((p) => [p.key, p]));
+
+/** Minimum wallet balance (PKR) to allow luxury catalog in normal (non-prime) tasks. */
+const LUXURY_MIN_BALANCE_FOR_NORMAL_PKR = 25000;
+
+/** Chance (1–100) to show a luxury item when balance qualifies (normal tasks only). */
+const LUXURY_NORMAL_ROLL_PCT = 30;
+
+const SMALL_PRODUCT_BALANCE_MAX = 1500;
+const SMALL_PRODUCT_FILES = new Set([
+  "charger.jpg",
+  "Tree-light.jpg",
+  "water-bottle.jpg",
+  "USB-128Gb.jpg",
+  "Girl-Stoler.jpg",
+  "Toy.jpg",
+  "Toy-gun.jpg",
+]);
+
+/** Product-specific Rs ranges (exact list from business). */
+const PRODUCT_PRICE_RANGES = {
+  "Man-Shoes.jpg": { min: 6000, max: 12000 },
+  "Woman-shoes.jpg": { min: 5000, max: 10000 },
+  "heals.jpg": { min: 4500, max: 9000 },
+  "Shoes-men.jpg": { min: 7000, max: 15000 },
+  "Men-Jacket.jpg": { min: 8000, max: 18000 },
+  "Man-Watch.jpg": { min: 12000, max: 35000 },
+  "Woman-watch.jpg": { min: 10000, max: 28000 },
+  "Health-watch.jpg": { min: 6000, max: 15000 },
+  "Smart Watch.jpg": { min: 9000, max: 20000 },
+  "Clock.jpg": { min: 4000, max: 12000 },
+  "Sony-headphone.jpg": { min: 6000, max: 18000 },
+  "speaker.jpg": { min: 5000, max: 16000 },
+  "charger.jpg": { min: 1500, max: 4000 },
+  "Girl-bag.jpg": { min: 7000, max: 20000 },
+  "laptop-bag.jpg": { min: 2500, max: 6000 },
+  "Girl-Stoler.jpg": { min: 2000, max: 5000 },
+  "Laptop.jpg": { min: 120000, max: 220000 },
+  "ipad.jpg": { min: 80000, max: 180000 },
+  "USB-128Gb.jpg": { min: 2000, max: 5000 },
+  "glasses.jpg": { min: 3000, max: 10000 },
+  "earring.jpg": { min: 2500, max: 12000 },
+  "Bike-Helmet.jpg": { min: 4000, max: 12000 },
+  "Canon-Camera.jpg": { min: 90000, max: 250000 },
+  "Makeup-kit.jpg": { min: 3000, max: 9000 },
+  "purfume.jpg": { min: 3500, max: 12000 },
+  "Toy.jpg": { min: 2000, max: 6000 },
+  "Toy-gun.jpg": { min: 2500, max: 7000 },
+  "Tree-light.jpg": { min: 1500, max: 4500 },
+  "study-table.jpg": { min: 15000, max: 40000 },
+  "toolbox.jpg": { min: 6000, max: 20000 },
+  "voltmeter.jpg": { min: 4000, max: 15000 },
+  "water-bottle.jpg": { min: 1500, max: 5000 },
+  "Serenity Silk Gown.jpg": { min: 25000, max: 35000 },
+  "Elysian Evening Dress.jpg": { min: 30000, max: 45000 },
+  "Radiant Luxe Sundress.jpg": { min: 20000, max: 32000 },
+  "Opal Grace Ball Dress.jpg": { min: 35000, max: 50000 },
+  "Celestia Satin Frock.jpg": { min: 28000, max: 40000 },
+  "Eternal Noir Essence.jpg": { min: 40000, max: 60000 },
+  "Velvet Opulence Scent.jpg": { min: 35000, max: 55000 },
+  "Midnight Amber Luxe.jpg": { min: 45000, max: 65000 },
+  "Royal Oud Signature.jpg": { min: 50000, max: 75000 },
+  "Celestial Bloom Elixir.jpg": { min: 55000, max: 80000 },
+  "Regal Chronos Elite.jpg": { min: 120000, max: 200000 },
+  "Titanium Marquis.jpg": { min: 130000, max: 220000 },
+  "Imperium Grandmaster.jpg": { min: 150000, max: 250000 },
+  "Noble Conqueror.jpg": { min: 110000, max: 210000 },
+  "Heritage Sovereign.jpg": { min: 140000, max: 280000 },
+  "Aurora Elegance Tote.jpg": { min: 70000, max: 120000 },
+  "Celeste Leather Clutch.jpg": { min: 65000, max: 110000 },
+  "Opulence Satchel.jpg": { min: 75000, max: 130000 },
+  "Seraphina Handbag.jpg": { min: 80000, max: 140000 },
+  "Luxe Horizon Shoulder Bag.jpg": { min: 85000, max: 150000 },
+  "prime-Shoes-combo.jpg": { min: 250000, max: 400000 },
+  "prime-Samsung-LED.jpg": { min: 200000, max: 350000 },
+  "prime-watch-gold.jpg": { min: 250000, max: 500000 },
+  "Prime-Yamaha-Piano.jpg": { min: 200000, max: 300000 },
+  "Prime-Piano.jpg": { min: 200000, max: 350000 },
+  "prime-iphone-17 pro.jpg": { min: 250000, max: 280000 },
+  "prime-iphone 17 pro max.jpg": { min: 300000, max: 350000 },
+  "Prime-luxury watch box.jpg": { min: 80000, max: 90000 },
+};
 
 /** Realistic Rs ranges by product category (filename/title hints). Commission = task_price × (bps/10000), clamped. */
 const DEFAULT_BAND = {
@@ -62,8 +201,20 @@ const DEFAULT_BAND = {
   commissionPctMaxBps: 200,
 };
 
+function commissionBandFromPriceRange(min, max) {
+  const lo = Math.max(10, Math.round(Number(min || 0) * 0.003));
+  const hiRaw = Math.max(lo, Math.round(Number(max || 0) * 0.012));
+  const hi = Math.min(3000, hiRaw);
+  return { commissionMin: lo, commissionMax: hi, commissionPctMinBps: 80, commissionPctMaxBps: 200 };
+}
+
 function priceBandForImagePath(imagePath) {
   const f = String(imagePath || "").toLowerCase();
+  const file = String(imagePath || "").split("/").pop() || "";
+  if (PRODUCT_PRICE_RANGES[file]) {
+    const { min, max } = PRODUCT_PRICE_RANGES[file];
+    return { min, max, ...commissionBandFromPriceRange(min, max) };
+  }
   if (f.includes("usb"))
     return { min: 500, max: 3000, commissionMin: 25, commissionMax: 55, commissionPctMinBps: 80, commissionPctMaxBps: 180 };
   if (
@@ -125,6 +276,26 @@ const FICTIONAL_PRODUCT_NAMES = {
   "toolbox.jpg": "CraftMaster Toolkit",
   "voltmeter.jpg": "PrecisionMeter Pro",
   "water-bottle.jpg": "AquaPure Flask",
+  "Serenity Silk Gown.jpg": "Serenity Silk Gown",
+  "Elysian Evening Dress.jpg": "Elysian Evening Dress",
+  "Radiant Luxe Sundress.jpg": "Radiant Luxe Sundress",
+  "Opal Grace Ball Dress.jpg": "Opal Grace Ball Dress",
+  "Celestia Satin Frock.jpg": "Celestia Satin Frock",
+  "Eternal Noir Essence.jpg": "Eternal Noir Essence",
+  "Velvet Opulence Scent.jpg": "Velvet Opulence Scent",
+  "Midnight Amber Luxe.jpg": "Midnight Amber Luxe",
+  "Royal Oud Signature.jpg": "Royal Oud Signature",
+  "Celestial Bloom Elixir.jpg": "Celestial Bloom Elixir",
+  "Regal Chronos Elite.jpg": "Regal Chronos Elite",
+  "Titanium Marquis.jpg": "Titanium Marquis",
+  "Imperium Grandmaster.jpg": "Imperium Grandmaster",
+  "Noble Conqueror.jpg": "Noble Conqueror",
+  "Heritage Sovereign.jpg": "Heritage Sovereign",
+  "Aurora Elegance Tote.jpg": "Aurora Elegance Tote",
+  "Celeste Leather Clutch.jpg": "Celeste Leather Clutch",
+  "Opulence Satchel.jpg": "Opulence Satchel",
+  "Seraphina Handbag.jpg": "Seraphina Handbag",
+  "Luxe Horizon Shoulder Bag.jpg": "Luxe Horizon Shoulder Bag",
   "prime-Shoes-combo.jpg": "Prime Shoes Combo",
   "prime-Samsung-LED.jpg": "Prime Samsung LED",
   "prime-watch-gold.jpg": "Prime Watch Gold",
@@ -134,6 +305,21 @@ const FICTIONAL_PRODUCT_NAMES = {
   "Prime-Piano.jpg": "Prime Piano",
   "Prime-luxury watch box.jpg": "Prime Luxury Watch Box",
 };
+
+function isPrimeImagePath(imagePath) {
+  const file = String(imagePath || "").split("/").pop() || "";
+  return PRIME_EXCLUSIVE_FILE_SET.has(file);
+}
+
+function isLuxuryExclusiveImagePath(imagePath) {
+  const file = String(imagePath || "").split("/").pop() || "";
+  return LUXURY_EXCLUSIVE_FILE_SET.has(file);
+}
+
+function isSmallProductImagePath(imagePath) {
+  const file = String(imagePath || "").split("/").pop() || "";
+  return SMALL_PRODUCT_FILES.has(file);
+}
 
 const COMMISSION_TIERS_HARDCODED = {
   0: { min: 40, max: 50 },
@@ -252,11 +438,28 @@ export function stablePrimeGrabProduct(userId, taskNo, cycleKey) {
     h ^= seed.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  const pool = PRIME_TASK_IMAGE_POOL.length
-    ? PRIME_TASK_IMAGE_POOL
+  const pool = PRIME_GRAB_IMAGE_POOL.length
+    ? PRIME_GRAB_IMAGE_POOL
     : ["/assets/tasks/prime-Shoes-combo.jpg"];
   const idx = Math.abs(h) % pool.length;
   const image = pool[idx];
+  return { image, title: imagePathToTitle(image) };
+}
+
+export function getPrimeProductOptions() {
+  return PRIME_PRODUCT_OPTIONS;
+}
+
+export function getPrimeProductByKey(key) {
+  const k = String(key || "").trim();
+  if (!k) return null;
+  return PRIME_PRODUCT_OPTIONS_BY_KEY.get(k) || null;
+}
+
+export function randomNonPrimeProductForPrimeTask() {
+  const pool = TASK_IMAGE_POOL.filter((img) => !isPrimeImagePath(img));
+  const source = pool.length ? pool : TASK_IMAGE_POOL;
+  const image = source[randomInt(0, source.length - 1)];
   return { image, title: imagePathToTitle(image) };
 }
 
@@ -326,9 +529,25 @@ export function pickItemsWithReplacement(source, count) {
 }
 
 export function buildImageCycles() {
-  const base = shuffle(TASK_IMAGE_POOL);
-  const sequence = base.length ? base : pickItemsWithReplacement(TASK_IMAGE_POOL, TASK_DAILY_LIMIT);
-  return { index: 0, sequence };
+  const unique = Array.from(new Set(TASK_IMAGE_POOL));
+  const base = shuffle(unique);
+  let sequence = base.slice(0, TASK_DAILY_LIMIT);
+  if (!sequence.length) {
+    sequence = pickItemsWithReplacement(TASK_IMAGE_POOL, TASK_DAILY_LIMIT);
+  }
+  if (sequence.length < TASK_DAILY_LIMIT && unique.length > 0) {
+    const minGap = Math.min(10, Math.max(1, unique.length - 1));
+    const recent = [...sequence];
+    while (sequence.length < TASK_DAILY_LIMIT) {
+      const blocked = new Set(recent.slice(-minGap));
+      const candidates = unique.filter((img) => !blocked.has(img));
+      const pool = candidates.length ? candidates : unique;
+      const next = pool[randomInt(0, pool.length - 1)];
+      sequence.push(next);
+      recent.push(next);
+    }
+  }
+  return { index: 0, sequence, version: IMAGE_CYCLE_VERSION };
 }
 
 export function generateOrderNumber(now = new Date()) {
@@ -458,7 +677,7 @@ export function computeBaseCommissionRs() {
 
 export function makeUserTaskFromState(taskNo, isPrime, imageState, userBalance = Infinity, totalCapitalForTier = null) {
   if (!isPrime) {
-    const { image, state } = nextTaskImageForUser(imageState);
+    const { image, state } = nextTaskImageForUser(imageState, userBalance);
     const task = makeActivityTask(taskNo, false, image, userBalance, totalCapitalForTier);
     task.image = image;
     task.title = imagePathToTitle(image);
@@ -468,16 +687,60 @@ export function makeUserTaskFromState(taskNo, isPrime, imageState, userBalance =
   return { task, imageState: imageState };
 }
 
-function nextTaskImageForUser(state) {
-  const st = state || buildImageCycles();
-  const image = st.sequence[st.index] || TASK_IMAGE_POOL[0];
+function advanceImageCycleIndex(st) {
   st.index += 1;
   if (st.index >= st.sequence.length) {
     const refreshed = buildImageCycles();
     st.index = refreshed.index;
     st.sequence = refreshed.sequence;
+    st.version = refreshed.version;
   }
-  return { image, state: st };
+}
+
+function nextTaskImageForUser(state, userBalance = Infinity) {
+  const st = state || buildImageCycles();
+  const balRaw = Number(userBalance);
+  const bal = Number.isFinite(balRaw) ? Math.max(0, balRaw) : Infinity;
+
+  if (
+    bal > SMALL_PRODUCT_BALANCE_MAX &&
+    bal >= LUXURY_MIN_BALANCE_FOR_NORMAL_PKR &&
+    LUXURY_EXCLUSIVE_IMAGE_PATHS.length &&
+    randomInt(1, 100) <= LUXURY_NORMAL_ROLL_PCT
+  ) {
+    const image =
+      LUXURY_EXCLUSIVE_IMAGE_PATHS[randomInt(0, LUXURY_EXCLUSIVE_IMAGE_PATHS.length - 1)];
+    advanceImageCycleIndex(st);
+    return { image, state: st };
+  }
+
+  const maxScans = Math.max(1, st.sequence?.length || TASK_DAILY_LIMIT);
+  let fallbackNonPrime = null;
+  let fallbackSmall = null;
+
+  for (let i = 0; i < maxScans; i += 1) {
+    const image = st.sequence[st.index] || TASK_IMAGE_POOL[0];
+    advanceImageCycleIndex(st);
+
+    if (isPrimeImagePath(image)) continue;
+    if (isLuxuryExclusiveImagePath(image)) continue;
+
+    if (!fallbackNonPrime) fallbackNonPrime = image;
+    if (!fallbackSmall && isSmallProductImagePath(image)) fallbackSmall = image;
+
+    if (bal <= SMALL_PRODUCT_BALANCE_MAX) {
+      if (isSmallProductImagePath(image)) return { image, state: st };
+      continue;
+    }
+
+    const band = priceBandForImagePath(image);
+    if (Number(band.min) <= bal) return { image, state: st };
+  }
+
+  if (bal <= SMALL_PRODUCT_BALANCE_MAX) {
+    return { image: fallbackSmall || fallbackNonPrime || TASK_IMAGE_POOL[0], state: st };
+  }
+  return { image: fallbackNonPrime || TASK_IMAGE_POOL[0], state: st };
 }
 
 export function buildEmailCandidates(emailRaw) {

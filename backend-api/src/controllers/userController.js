@@ -152,3 +152,94 @@ export async function postActivityLog(req, res) {
     res.status(400).json({ error: err.message || "Failed to add activity" });
   }
 }
+
+export async function getWalletCard(req, res) {
+  try {
+    const out = await User.getWalletCard(req.userId);
+    if (!out) return res.status(404).json({ error: "User not found" });
+    res.json(out);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch wallet card" });
+  }
+}
+
+export async function upsertWalletCard(req, res) {
+  try {
+    const body = req.body || {};
+    const out = await User.upsertWalletCard(req.userId, {
+      mobilePhone: body.mobilePhone,
+      accountHolderName: body.accountHolderName,
+      accountNumber: body.accountNumber,
+      bankName: body.bankName,
+      branch: body.branch,
+      routingNumber: body.routingNumber,
+    });
+    if (!out) return res.status(404).json({ error: "User not found" });
+    res.json({ message: "Card information saved", card: out });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to save wallet card" });
+  }
+}
+
+export async function unlinkWalletCard(req, res) {
+  try {
+    const withdrawalPassword = String(req.body?.withdrawalPassword || "");
+    const out = await User.unlinkWalletCard(req.userId, withdrawalPassword);
+    if (!out) return res.status(404).json({ error: "User not found" });
+    if (out.ok === false && out.code === "PASSWORD_REQUIRED") {
+      return res.status(400).json({ error: "Withdrawal password is required" });
+    }
+    if (out.ok === false && out.code === "INVALID_PASSWORD") {
+      return res.status(401).json({ error: "Invalid withdrawal password" });
+    }
+    res.json({ message: "Card information unlinked" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to unlink wallet card" });
+  }
+}
+
+export async function getWithdrawalState(req, res) {
+  try {
+    const out = await User.getWithdrawalState(req.userId);
+    if (!out) return res.status(404).json({ error: "User not found" });
+    res.json(out);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch withdrawal state" });
+  }
+}
+
+export async function requestWithdrawal(req, res) {
+  try {
+    const body = req.body || {};
+    const out = await User.createWithdrawalRequest(req.userId, {
+      bankName: body.bankName,
+      accountNumber: body.accountNumber,
+      amount: body.amount,
+      withdrawalPassword: body.withdrawalPassword,
+    });
+    if (!out) return res.status(404).json({ error: "User not found" });
+    if (!out.ok && out.code === "PASSWORD_REQUIRED") return res.status(400).json({ error: "Withdrawal password is required" });
+    if (!out.ok && out.code === "INVALID_PASSWORD") return res.status(401).json({ error: "Invalid withdrawal password" });
+    if (!out.ok && out.code === "INVALID_AMOUNT") return res.status(400).json({ error: "Invalid withdrawal amount" });
+    if (!out.ok && out.code === "INSUFFICIENT_BALANCE") return res.status(400).json({ error: "Insufficient balance for withdraw" });
+    if (!out.ok && out.code === "ALREADY_PENDING") return res.status(400).json({ error: "Withdrawal request already pending" });
+    res.json({ message: "Your withdraw is pending. Wait for approval." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to request withdrawal" });
+  }
+}
+
+export async function acknowledgeWithdrawal(req, res) {
+  try {
+    await User.clearWithdrawalState(req.userId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to acknowledge withdrawal notification" });
+  }
+}

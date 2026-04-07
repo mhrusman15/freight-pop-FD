@@ -2,7 +2,7 @@ import { TASK_DAILY_LIMIT } from "./taskGeneration.js";
 
 const TASK_NO_MAX = TASK_DAILY_LIMIT;
 
-/** @returns {{ task_no: number, negative_amount: number, is_completed: boolean }[]} */
+/** @returns {{ task_no: number, negative_amount: number, is_completed: boolean, product_key?: string|null }[]} */
 export function normalizePrimeOrders(raw) {
   if (raw == null) return [];
   let arr = raw;
@@ -26,6 +26,7 @@ export function normalizePrimeOrders(raw) {
       task_no,
       negative_amount,
       is_completed: Boolean(p?.is_completed),
+      product_key: p?.product_key ? String(p.product_key) : null,
     });
   }
   return out.sort((a, b) => a.task_no - b.task_no);
@@ -56,7 +57,7 @@ export function getActivePrime(primeOrders, currentTaskNo) {
   return null;
 }
 
-/** Admin assign-with-prime body: [{ task_no, negative_amount }] — amounts may be positive (recharge required). */
+/** Admin assign-with-prime body: [{ task_no, negative_amount, product_key? }] — amounts may be positive (recharge required). */
 export function normalizePrimeOrdersFromAssign(primeOrders) {
   const arr = Array.isArray(primeOrders) ? primeOrders : [];
   const seen = new Set();
@@ -71,6 +72,7 @@ export function normalizePrimeOrdersFromAssign(primeOrders) {
       task_no,
       negative_amount,
       is_completed: false,
+      product_key: p?.product_key ? String(p.product_key) : null,
     });
   }
   return out.sort((a, b) => a.task_no - b.task_no);
