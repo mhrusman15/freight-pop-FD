@@ -50,13 +50,14 @@ export default function ProfileWithdrawPage() {
       setLoadingWalletCard(true);
       const [cardRes, wdRes] = await Promise.all([userApi.getWalletCard(), userApi.getWithdrawalState()]);
 
-      if (cardRes.data) {
-        const has = Boolean(cardRes.data.bankName && cardRes.data.accountNumber);
+      const walletCard = cardRes.data;
+      if (walletCard) {
+        const has = Boolean(walletCard.bankName && walletCard.accountNumber);
         setHasLinkedBank(has);
         setFormData((prev) => ({
           ...prev,
-          bankName: cardRes.data.bankName || "",
-          accountNumber: cardRes.data.accountNumber || "",
+          bankName: walletCard.bankName || "",
+          accountNumber: walletCard.accountNumber || "",
         }));
         setMethod(has ? "BANK" : "");
       } else {
